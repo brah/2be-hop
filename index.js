@@ -4,7 +4,6 @@ const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
 const config = require('./config.json');
 const fs = require('fs');
-const db = require('./db');
 
 const applicationId = config.applicationId;
 const guildId = config.guildId;
@@ -74,12 +73,7 @@ client.on('interactionCreate', async interaction => {
 	}
 
 	try {
-		if (command.requireDB) {
-			await command.execute(interaction, db.con);
-		}
-		else {
-			await command.execute(interaction);
-		}
+		await command.execute(interaction);
 	}
 	catch (err) {
 		console.error(`[index] error in /${interaction.commandName}:`, err);
@@ -89,9 +83,10 @@ client.on('interactionCreate', async interaction => {
 });
 
 // Adapts a Discord message into the same interface the slash command execute()
-// functions expect (deferReply / editReply), so prefix and slash commands share code.
-function createMessageAdapter(message) {
+// functions expect (deferReply / editReply / options), so prefix and slash commands share code.
+function createMessageAdapter(message, command) {
 	let sentMessage = null;
+	const args = message.content.trim().split(/\s+/).slice(1);
 	const adapter = {
 		deferred: false,
 		replied:  false,
@@ -100,7 +95,7 @@ function createMessageAdapter(message) {
 			await message.channel.sendTyping();
 		},
 		async editReply(content) {
-			const payload = typeof content === 'string' ? content : (content.content ?? '');
+			const payload = typeof content === 'string' ? { content } : content;
 			if (sentMessage) {
 				sentMessage = await sentMessage.edit(payload);
 			}
@@ -108,6 +103,17 @@ function createMessageAdapter(message) {
 				sentMessage = await message.channel.send(payload);
 				this.replied = true;
 			}
+		},
+		options: {
+			getString(name) {
+				const idx = command.data.options?.findIndex(o => o.name === name) ?? -1;
+				return idx >= 0 ? (args[idx] ?? null) : null;
+			},
+			getInteger(name) {
+				const idx = command.data.options?.findIndex(o => o.name === name) ?? -1;
+				const val = args[idx];
+				return (idx >= 0 && val !== undefined) ? parseInt(val, 10) : null;
+			},
 		},
 	};
 	return adapter;
@@ -123,14 +129,9 @@ client.on('messageCreate', async message => {
 	const command = client.commands.get(commandName);
 	if (!command) return;
 
-	const adapter = createMessageAdapter(message);
+	const adapter = createMessageAdapter(message, command);
 	try {
-		if (command.requireDB) {
-			await command.execute(adapter, db.con);
-		}
-		else {
-			await command.execute(adapter);
-		}
+		await command.execute(adapter);
 	}
 	catch (err) {
 		console.error(`[index] error in .${commandName}:`, err);
@@ -143,7 +144,7 @@ client.on('messageCreate', async message => {
 	}
 });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
 	console.log('Bot ready!');
 });
 

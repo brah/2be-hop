@@ -6,10 +6,5 @@
 	"rconPass": "RCON_PASS",
 	"rconPort": 27015,
 	"adminRoles": [],
-	"SJ_API_KEY": "SJPublicAPIKey",
-	"dbhost": "localhost",
-	"dbname": "YOUR_DB_NAME",
-	"dbuser": "YOUR_DB_USER",
-	"dbpassword": "YOUR_DB_PASSWORD",
-	"dbport": 3306
+	"SJ_API_KEY": "SJPublicAPIKey"
 }

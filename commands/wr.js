@@ -1,137 +1,138 @@
 const { SlashCommandBuilder } = require('discord.js');
 const path = require('path');
+const config = require(path.join(__dirname, '..', 'config.json'));
+const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
+const SERVER_IP = '203.209.209.92:27015';
 const SteamID = require('steamid');
 const SteamIDResolver = require('steamid-resolver');
-const trackMap = require(path.join(__dirname, '..', 'tracks.json'));
-const styleMap = require(path.join(__dirname, '..', 'styles.json'));
+
+function formatTime(seconds) {
+	const totalSeconds = Math.floor(seconds);
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const secs = totalSeconds % 60;
+	if (hours < 1) {
+		return minutes.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
+	}
+	return hours.toString().padStart(2, '0') + ':' + minutes.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
+}
 
 module.exports = {
-	requireDB: true,
 	data: new SlashCommandBuilder()
 		.setName('wr')
-		.setDescription('Retrieves the specified record')
+		.setDescription('Retrieves the SpaceBar Warriors server world record for the map')
 		.addStringOption(option =>
 			option.setName('map')
 				.setDescription('Name of the map')
-				.setRequired(true))
-		.addIntegerOption(option =>
-			option.setName('track')
-				.setDescription('Normal/Bonus')
-				.addChoices(
-					{ name: 'Normal', value: 0 },
-					{ name: 'Bonus', value: 1 },
-				))
-		.addIntegerOption(option =>
-			option.setName('style')
-				.setDescription('Style of the record')
-				.addChoices(...Object.entries(styleMap).map(([key, name]) => ({ name, value: Number.parseInt(key) })))),
-	async execute(interaction, con) {
+				.setRequired(true)),
+	async execute(interaction) {
 		const mapName = interaction.options.getString('map');
-		const track = interaction.options.getInteger('track') || 0;
-		const style = interaction.options.getInteger('style') || 0;
-
-		const textTrack = trackMap[track];
-		const textStyle = styleMap[style];
-		let sql;
-
 		await interaction.deferReply();
 
-		// Match exact map name
-		if (mapName.startsWith('bhop_') || mapName.startsWith('bhop_kz_') || mapName.startsWith('kz_bhop_') || mapName.startsWith('kz_')) {
-			sql = 'SELECT time, jumps, sync, strafes, date, map, u.name, p.auth FROM playertimes p, users u WHERE map =  ' + con.escape(mapName) + '  AND track = ? AND style = ? AND u.auth = p.auth ORDER BY time ASC LIMIT 1';
-		}
-		// Match close enough
-		else {
-			sql = 'SELECT time, jumps, sync, strafes, date, map, u.name, p.auth FROM playertimes p, users u WHERE map LIKE ' + con.escape('%' + mapName + '%') + ' AND track = ? AND style = ? AND u.auth = p.auth ORDER BY time ASC LIMIT 1';
-		}
-		con.query(sql, [track, style], async (err, result) => {
-			if (err) {
-				return interaction.editReply({ content: 'There has been an issue with this query. Yell at Merz.' + err });
-			}
+		const apiOptions = {
+			method: 'GET',
+			headers: {
+				'api-key': config.SJ_API_KEY,
+			},
+		};
 
-			if (!result.length) {
-				return interaction.editReply({ content: 'Map not found.' });
-			}
+		return fetch(`${SOURCEJUMP_API_URL}/records/${mapName}`, apiOptions)
+			.then(response => response.text())
+			.then(async body => {
+				if (body.length === 2) {
+					return interaction.editReply({ content: `No times found for ${mapName}` });
+				}
 
-			let avatarUrl = null;
-			let steamID64 = null;
-			try {
-				steamID64 = new SteamID(result[0].auth).getSteamID64();
-				avatarUrl = await new Promise((resolve) => {
-					SteamIDResolver.steamID64ToFullInfo(steamID64, (err, info) => {
-						resolve((err || !info) ? null : (info.avatarMedium?.[0] || null));
-					});
-				});
-			}
-			catch {
-				// no avatar, continue
-			}
+				const records = JSON.parse(body);
+				const serverRecords = records.filter(r => r.ip === SERVER_IP);
 
-			return interaction.editReply({ embeds: [buildEmbed(result, textTrack, textStyle, steamID64, avatarUrl)] });
-		});
+				if (!serverRecords.length) {
+					return interaction.editReply({ content: `No times found for ${mapName} on SpaceBar Warriors` });
+				}
+
+				const wr = serverRecords[0];
+
+				let avatarUrl = null;
+				let steamID64 = null;
+				if (wr.steamid) {
+					try {
+						steamID64 = new SteamID(wr.steamid).getSteamID64();
+						avatarUrl = await new Promise((resolve) => {
+							SteamIDResolver.steamID64ToFullInfo(steamID64, (err, info) => {
+								resolve((err || !info) ? null : (info.avatarMedium?.[0] || null));
+							});
+						});
+					}
+					catch {
+						// no avatar, continue
+					}
+				}
+
+				const profileUrl = steamID64
+					? `https://steamcommunity.com/profiles/${steamID64}`
+					: null;
+
+				const embed = {
+					color: 0x3498DB,
+					author: {
+						name: wr.name.toString(),
+						...(profileUrl ? { url: profileUrl } : {}),
+						...(avatarUrl ? { icon_url: avatarUrl } : {}),
+					},
+					title: wr.map.toString(),
+					fields: [
+						{
+							name: 'Time',
+							value: (() => {
+								const t = typeof wr.time === 'number' ? formatTime(wr.time) : wr.time.toString();
+								if (wr.wrDif === 'World Record') return `⭐ ${t}`;
+								return wr.wrDif ? `${t} (${wr.wrDif})` : t;
+							})(),
+							inline: true,
+						},
+						{
+							name: 'SJ',
+							value: `[link](https://sourcejump.net/records/map/${wr.map})`,
+							inline: true,
+						},
+						{
+							name: '\u200b',
+							value: '\u200b',
+							inline: true,
+						},
+						{
+							name: 'Jumps',
+							value: wr.jumps.toString(),
+							inline: true,
+						},
+						{
+							name: 'Sync',
+							value: Number(wr.sync).toFixed(2) + '%',
+							inline: true,
+						},
+						{
+							name: 'Strafes',
+							value: wr.strafes.toString(),
+							inline: true,
+						},
+						{
+							name: 'Run Date',
+							value: wr.date.toString(),
+							inline: true,
+						},
+						{
+							name: 'Server',
+							value: wr.hostname.toString(),
+							inline: true,
+						},
+					],
+					timestamp: new Date(),
+				};
+				return interaction.editReply({ embeds: [embed] });
+			})
+			.catch(err => {
+				console.error(err);
+				return interaction.editReply({ content: 'There was an error fetching data from the SourceJump API.' });
+			});
 	},
 };
-
-function buildEmbed(result, textTrack, textStyle, steamID64, avatarUrl) {
-	const hours = Math.floor(result[0].time / 3600);
-	const minutes = Math.floor((result[0].time % 3600) / 60);
-	const seconds = Math.floor(result[0].time % 60);
-	let formatted;
-	if (hours < 1) {
-		formatted = minutes.toString().padStart(2, '0') + ':' + seconds.toString().padStart(2, '0');
-	}
-	else {
-		formatted = hours.toString().padStart(2, '0') + ':' + minutes.toString().padStart(2, '0') + ':' + seconds.toString().padStart(2, '0');
-	}
-
-	const profileUrl = steamID64
-		? `https://steamcommunity.com/profiles/${steamID64}`
-		: null;
-
-	const embed = {
-		color: 0x3498DB,
-		author: {
-			name: result[0].name.toString(),
-			...(profileUrl ? { url: profileUrl } : {}),
-			...(avatarUrl ? { icon_url: avatarUrl } : {}),
-		},
-		title: result[0].map.toString(),
-		fields: [
-			{
-				name: 'Time',
-				value: formatted,
-				inline: true,
-			},
-			{
-				name: 'Track',
-				value: textTrack,
-				inline: true,
-			},
-			{
-				name: 'Style',
-				value: textStyle,
-				inline: true,
-			},
-			{
-				name: 'Jumps',
-				value: result[0].jumps.toString(),
-				inline: true,
-			},
-			{
-				name: 'Sync',
-				value: Number(result[0].sync).toFixed(2) + '%',
-				inline: true,
-			},
-			{
-				name: 'Strafes',
-				value: result[0].strafes.toString(),
-				inline: true,
-			},
-		],
-		timestamp: new Date(),
-		footer: {
-			text: 'Wrong map/style? Try using the exact name!',
-		},
-	};
-	return embed;
-}

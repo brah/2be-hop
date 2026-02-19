@@ -21,7 +21,6 @@
     "@discordjs/rest": "^2.6.0",
     "discord-api-types": "^0.37.120",
     "discord.js": "^14.25.1",
-    "mysql2": "^3.17.2",
     "srcds-rcon": "^2.2.1",
     "steamid": "^2.0.0",
     "steamid-resolver": "^1.2.1"
