@@ -1,4 +1,4 @@
-const mysql = require('mysql');
+const mysql = require('mysql2');
 const path = require('path');
 const config = require(path.join(__dirname, 'config.json'));
 

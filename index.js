@@ -1,7 +1,7 @@
 // Import required dependencies
-const { Client, Intents, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const { REST } = require('@discordjs/rest');
-const { Routes } = require('discord-api-types/v9');
+const { Routes } = require('discord-api-types/v10');
 const config = require('./config.json');
 const fs = require('fs');
 const db = require('./db');
@@ -13,9 +13,9 @@ const guildId = config.guildId;
 // MESSAGE_CONTENT is a privileged intent — enable it in the Discord Developer Portal
 const client = new Client({
 	intents: [
-		Intents.FLAGS.GUILDS,
-		Intents.FLAGS.GUILD_MESSAGES,
-		Intents.FLAGS.MESSAGE_CONTENT,
+		GatewayIntentBits.Guilds,
+		GatewayIntentBits.GuildMessages,
+		GatewayIntentBits.MessageContent,
 	],
 });
 
@@ -36,7 +36,7 @@ for (const file of commandFiles) {
 }
 
 // Create a Discord.js REST API object
-const rest = new REST({ version: '9' }).setToken(config.token);
+const rest = new REST({ version: '10' }).setToken(config.token);
 
 // Register slash commands with Discord's API
 (async () => {
@@ -55,7 +55,7 @@ const rest = new REST({ version: '9' }).setToken(config.token);
 
 // Interaction handler
 client.on('interactionCreate', async interaction => {
-	if (!interaction.isCommand()) return;
+	if (!interaction.isChatInputCommand()) return;
 	const command = client.commands.get(interaction.commandName);
 
 	if (!command) {
@@ -137,7 +137,9 @@ client.on('messageCreate', async message => {
 		try {
 			await adapter.editReply('There was an error executing this command.');
 		}
-		catch (_) { /* ignore */ }
+		catch {
+			// ignore
+		}
 	}
 });
 

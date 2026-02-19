@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('@discordjs/builders');
+const { SlashCommandBuilder } = require('discord.js');
 const path = require('path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const Rcon = require('srcds-rcon');
@@ -27,7 +27,9 @@ async function withRcon(interaction, fn) {
 	}
 	finally {
 		try { await rcon.disconnect(); }
-		catch (_) { /* ignore */ }
+		catch {
+			// ignore
+		}
 	}
 }
 

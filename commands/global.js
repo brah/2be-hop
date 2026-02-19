@@ -1,8 +1,7 @@
-const { SlashCommandBuilder } = require('@discordjs/builders');
+const { SlashCommandBuilder } = require('discord.js');
 const path = require('path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
-const fetch = require('node-fetch');
 const SteamID = require('steamid');
 const SteamIDResolver = require('steamid-resolver');
 
@@ -60,7 +59,7 @@ module.exports = {
 							});
 						});
 					}
-					catch (e) {
+					catch {
 						// no avatar, continue
 					}
 				}

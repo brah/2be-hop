@@ -1,8 +1,7 @@
-const { SlashCommandBuilder } = require('@discordjs/builders');
+const { SlashCommandBuilder } = require('discord.js');
 const path = require('path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
-const fetch = require('node-fetch');
 const apiOptions = {
 	method: 'GET',
 	headers: {
@@ -47,7 +46,7 @@ module.exports = {
 									});
 								});
 							}
-							catch (e) {
+							catch {
 								// no avatar, continue
 							}
 
@@ -116,7 +115,7 @@ function getSteamID(profile, callback) {
 			}
 			return callback(null, profile);
 		}
-		catch (err) {
+		catch {
 			return callback('a', null);
 		}
 	}

@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('@discordjs/builders');
+const { SlashCommandBuilder } = require('discord.js');
 const path = require('path');
 const SteamID = require('steamid');
 const SteamIDResolver = require('steamid-resolver');
@@ -17,13 +17,14 @@ module.exports = {
 		.addIntegerOption(option =>
 			option.setName('track')
 				.setDescription('Normal/Bonus')
-				.addChoice('Normal', 0)
-				.addChoice('Bonus', 1))
-		.addIntegerOption(option => {
-			option.setName('style').setDescription('Style of the record');
-			Object.entries(styleMap).forEach(([key, name]) => option.addChoice(name, Number.parseInt(key)));
-			return option;
-		}),
+				.addChoices(
+					{ name: 'Normal', value: 0 },
+					{ name: 'Bonus', value: 1 },
+				))
+		.addIntegerOption(option =>
+			option.setName('style')
+				.setDescription('Style of the record')
+				.addChoices(...Object.entries(styleMap).map(([key, name]) => ({ name, value: Number.parseInt(key) })))),
 	async execute(interaction, con) {
 		const mapName = interaction.options.getString('map');
 		const track = interaction.options.getInteger('track') || 0;
@@ -62,7 +63,7 @@ module.exports = {
 					});
 				});
 			}
-			catch (e) {
+			catch {
 				// no avatar, continue
 			}
 
