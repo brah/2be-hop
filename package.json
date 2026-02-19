@@ -24,6 +24,7 @@
     "discord.js": "^13.1.0",
     "mysql": "^2.18.1",
     "node-fetch": "^2.6.2",
+    "srcds-rcon": "^2.2.1",
     "steamid": "^2.0.0",
     "steamid-resolver": "^1.2.1"
   },
