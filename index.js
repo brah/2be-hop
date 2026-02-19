@@ -69,37 +69,38 @@ client.on('interactionCreate', async interaction => {
 	}
 });
 
-// Initialize database object
-const con = new mysql.createConnection({
-	host: config.dbhost,
-	database: config.dbname,
-	user: config.dbuser,
-	password: config.dbpassword,
-	port: config.dbport,
-	insecureAuth: true,
-});
+// Database connection held in a let so dbConnect() can reassign it on reconnect
+let con;
 
-// Initialize database connection
-// dbConnect();
-
-// If the database connection ever has an error, end the connection and create a new one.
-con.on('error', (err) => {
-	console.log(err);
-	console.log('Recreating database connection.');
-	con.end();
-	dbConnect();
-});
-
+// Creates a fresh connection object, attaches the error handler, and connects.
+// Must create a new object each time — mysql connections are one-shot and cannot
+// be reconnected after end() is called.
 function dbConnect() {
-	con.connect((err => {
+	con = mysql.createConnection({
+		host: config.dbhost,
+		database: config.dbname,
+		user: config.dbuser,
+		password: config.dbpassword,
+		port: config.dbport,
+	});
+
+	con.on('error', (err) => {
+		console.log(err);
+		console.log('Recreating database connection.');
+		dbConnect();
+	});
+
+	con.connect((err) => {
 		if (err) {
 			console.error(err);
 		}
 		else {
 			console.log('Connected to database.');
 		}
-	}));
+	});
 }
+
+dbConnect();
 
 client.once('ready', () => {
 	console.log('Bot ready!');

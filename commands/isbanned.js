@@ -12,7 +12,6 @@ const apiOptions = {
 const SteamID = require('steamid');
 const SteamIDResolver = require('steamid-resolver');
 
-
 module.exports = {
 	data: new SlashCommandBuilder()
 		.setName('isbanned')
@@ -23,40 +22,72 @@ module.exports = {
 				.setRequired(true)),
 	async execute(interaction) {
 		const profile = interaction.options.getString('user');
+		await interaction.deferReply();
 		getSteamID(profile, (err, result) => {
-			if (err) return interaction.reply({ content: 'There is an issue with the provided Steam ID/URL.' });
+			if (err) return interaction.editReply({ content: 'There is an issue with the provided Steam ID/URL.' });
 			const sid = new SteamID(result);
 			const id = sid.getSteam3RenderedID();
+			const steamID64 = sid.getSteamID64();
 
 			fetch(`${SOURCEJUMP_API_URL}/players/banned`, apiOptions)
 				.then(response => response.text())
-				.then(body => {
-				// Check if the body is empty
+				.then(async body => {
+				// Check if the body is empty (empty array [] has string length 2)
 					if (body.length === 2) {
-						return interaction.reply({ content: 'Either Tony has unbanned all players, or there is an issue with the API. Try again later.' });
+						return interaction.editReply({ content: 'Either Tony has unbanned all players, or there is an issue with the API. Try again later.' });
 					}
 					body = JSON.parse(body);
-					for (let i = 0; i < body.length; i++) {
-						if (body[i].steamid == id) {
+					for (const element of body) {
+						if (element.steamid == id) {
+							let avatarUrl = null;
+							try {
+								avatarUrl = await new Promise((resolve) => {
+									SteamIDResolver.steamID64ToFullInfo(steamID64, (err, info) => {
+										resolve((err || !info) ? null : (info.avatarMedium?.[0] || null));
+									});
+								});
+							}
+							catch (e) {
+								// no avatar, continue
+							}
+
 							const embed = {
-								color: 'RED',
-								title: 'Player is banned.',
+								color: 0xE74C3C,
+								author: {
+									name: element.name.toString(),
+									url: `https://steamcommunity.com/profiles/${steamID64}`,
+									...(avatarUrl ? { icon_url: avatarUrl } : {}),
+								},
+								title: 'Player is banned on SourceJump.',
+								...(avatarUrl ? { thumbnail: { url: avatarUrl } } : {}),
 								fields: [
 									{
-										name: 'Player: ',
-										value: '[' + body[i].name + `](https://steamcommunity.com/profiles/${id})`,
-									},
-									{
-										name: 'Ban Date: ',
-										value: body[i].ban_date.toString(),
+										name: 'Ban Date',
+										value: element.ban_date.toString(),
 									},
 								],
 								timestamp: new Date(),
 							};
-							return interaction.reply({ embeds: [embed] });
+							return interaction.editReply({ embeds: [embed] });
 						}
 					}
-					return interaction.reply({ content: `https://steamcommunity.com/profiles/${id} is not banned.` });
+					return interaction.editReply({
+						embeds: [{
+							color: 0x57F287,
+							title: 'Player is not banned on SourceJump.',
+							fields: [
+								{
+									name: 'Steam Profile',
+									value: `[View Profile](https://steamcommunity.com/profiles/${steamID64})`,
+								},
+							],
+							timestamp: new Date(),
+						}],
+					});
+				})
+				.catch(err => {
+					console.error(err);
+					return interaction.editReply({ content: 'There was an error fetching data from the SourceJump API.' });
 				});
 		});
 	},
@@ -71,7 +102,7 @@ function getSteamID(profile, callback) {
 	}
 	else if (profile.includes('steamcommunity.com/id')) {
 		if (profile.charAt(profile.length - 1) == '/') profile = profile.slice(0, -1);
-		SteamIDResolver.customUrlTosteamID64(profile, (err, res) => {
+		SteamIDResolver.customUrlToSteamID64(profile, (err, res) => {
 			if (err) return callback(err, null);
 			return callback(null, res);
 		});

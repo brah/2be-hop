@@ -1,4 +1,9 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
+const path = require('path');
+const SteamID = require('steamid');
+const SteamIDResolver = require('steamid-resolver');
+const trackMap = require(path.join(__dirname, '..', 'tracks.json'));
+const styleMap = require(path.join(__dirname, '..', 'styles.json'));
 
 module.exports = {
 	requireDB: true,
@@ -30,18 +35,20 @@ module.exports = {
 				.addChoice('Segmented Low Gravity', 10)
 				.addChoice('Easy Scroll', 11)
 				.addChoice('Parkour', 12)
-				.addChoice('Segmented Parkour', 13)),
+				.addChoice('Segmented Parkour', 13)
+				.addChoice('Speedrun', 14)
+				.addChoice('Autosync', 15)
+				.addChoice('TAS', 16)),
 	async execute(interaction, con) {
 		const mapName = interaction.options.getString('map');
 		const track = interaction.options.getInteger('track') || 0;
 		const style = interaction.options.getInteger('style') || 0;
 
-		const path = require('path');
-		const trackMap = require(path.join(__dirname, '..', 'tracks.json'));
-		const styleMap = require(path.join(__dirname, '..', 'styles.json'));
 		const textTrack = trackMap[track];
 		const textStyle = styleMap[style];
 		let sql;
+
+		await interaction.deferReply();
 
 		// Match exact map name
 		if (mapName.startsWith('bhop_') || mapName.startsWith('bhop_kz_') || mapName.startsWith('kz_bhop_') || mapName.startsWith('kz_')) {
@@ -51,67 +58,89 @@ module.exports = {
 		else {
 			sql = 'SELECT time, jumps, sync, strafes, date, map, u.name, p.auth FROM playertimes p, users u WHERE map LIKE ' + con.escape('%' + mapName + '%') + ' AND track = ? AND style = ? AND u.auth = p.auth ORDER BY time ASC LIMIT 1';
 		}
-		con.query(sql, [track, style], (err, result) => {
+		con.query(sql, [track, style], async (err, result) => {
 			if (err) {
-				return interaction.reply({ content: 'There has been an issue with this query. Yell at Merz. \n' + err });
+				return interaction.editReply({ content: 'There has been an issue with this query. Yell at Merz.' + err });
 			}
 
 			if (!result.length) {
-				return interaction.reply({ content: 'Map not found.' });
+				return interaction.editReply({ content: 'Map not found.' });
 			}
 
-			return interaction.reply({ embeds: [buildEmbed(result, textTrack, textStyle)] });
+			let avatarUrl = null;
+			let steamID64 = null;
+			try {
+				steamID64 = new SteamID(result[0].auth).getSteamID64();
+				avatarUrl = await new Promise((resolve) => {
+					SteamIDResolver.steamID64ToFullInfo(steamID64, (err, info) => {
+						resolve((err || !info) ? null : (info.avatarMedium?.[0] || null));
+					});
+				});
+			}
+			catch (e) {
+				// no avatar, continue
+			}
+
+			return interaction.editReply({ embeds: [buildEmbed(result, textTrack, textStyle, steamID64, avatarUrl)] });
 		});
 	},
 };
 
-function buildEmbed(result, textTrack, textStyle) {
-	const hours = Math.floor(result[0].time / 60 / 60);
-	const minutes = Math.floor(result[0].time / 60);
+function buildEmbed(result, textTrack, textStyle, steamID64, avatarUrl) {
+	const hours = Math.floor(result[0].time / 3600);
+	const minutes = Math.floor((result[0].time % 3600) / 60);
 	const seconds = Math.floor(result[0].time % 60);
 	let formatted;
 	if (hours < 1) {
 		formatted = minutes.toString().padStart(2, '0') + ':' + seconds.toString().padStart(2, '0');
 	}
 	else {
-		formatted = hours.toString().padStart(2, '0') + minutes.toString().padStart(2, '0') + ':' + seconds.toString().padStart(2, '0');
+		formatted = hours.toString().padStart(2, '0') + ':' + minutes.toString().padStart(2, '0') + ':' + seconds.toString().padStart(2, '0');
 	}
 
+	const profileUrl = steamID64
+		? `https://steamcommunity.com/profiles/${steamID64}`
+		: null;
+
 	const embed = {
-		color: 'BLUE',
+		color: 0x3498DB,
+		author: {
+			name: result[0].name.toString(),
+			...(profileUrl ? { url: profileUrl } : {}),
+			...(avatarUrl ? { icon_url: avatarUrl } : {}),
+		},
 		title: result[0].map.toString(),
-		fields: [{
-			name: 'Runner: ',
-			value: result[0].name.toString(),
-		},
-		{
-			name: 'Time: ',
-			value: formatted.toString(),
-			inline: false,
-		},
-		{
-			name: 'Track: ',
-			value: textTrack,
-		},
-		{
-			name: 'Style: ',
-			value: textStyle,
-		},
-		{
-			name: 'Jumps: ',
-			value: result[0].jumps.toString(),
-			inline: true,
-		},
-		{
-			name: 'Sync: ',
-			value: result[0].sync.toString() + '%',
-			inline: true,
-		},
-		{
-			name: 'Strafes: ',
-			value: result[0].strafes.toString(),
-			inline: true,
-		},
+		fields: [
+			{
+				name: 'Time',
+				value: formatted,
+				inline: true,
+			},
+			{
+				name: 'Track',
+				value: textTrack,
+				inline: true,
+			},
+			{
+				name: 'Style',
+				value: textStyle,
+				inline: true,
+			},
+			{
+				name: 'Jumps',
+				value: result[0].jumps.toString(),
+				inline: true,
+			},
+			{
+				name: 'Sync',
+				value: Number(result[0].sync).toFixed(2) + '%',
+				inline: true,
+			},
+			{
+				name: 'Strafes',
+				value: result[0].strafes.toString(),
+				inline: true,
+			},
 		],
 		timestamp: new Date(),
 		footer: {

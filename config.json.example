@@ -1,0 +1,11 @@
+{
+	"token": "YOUR_DISCORD_BOT_TOKEN",
+	"applicationId": "YOUR_APPLICATION_ID",
+	"guildId": "YOUR_GUILD_ID",
+	"SJ_API_KEY": "SJPublicAPIKey",
+	"dbhost": "localhost",
+	"dbname": "YOUR_DB_NAME",
+	"dbuser": "YOUR_DB_USER",
+	"dbpassword": "YOUR_DB_PASSWORD",
+	"dbport": 3306
+}
