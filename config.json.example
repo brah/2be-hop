@@ -5,6 +5,7 @@
 	"rconIP": "RCON_IP",
 	"rconPass": "RCON_PASS",
 	"rconPort": 27015,
+	"adminRoles": [],
 	"SJ_API_KEY": "SJPublicAPIKey",
 	"dbhost": "localhost",
 	"dbname": "YOUR_DB_NAME",

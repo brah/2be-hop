@@ -87,6 +87,13 @@ function sydneyTimeString() {
 	return `${get('month')}/${get('day')}/${get('year')} - ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
+function isAdmin(interaction) {
+	const adminRoles = config.adminRoles;
+	if (!Array.isArray(adminRoles) || adminRoles.length === 0) return false;
+	const memberRoles = interaction.member._roles ?? [];
+	return adminRoles.some(id => memberRoles.includes(String(id)));
+}
+
 module.exports = [
 	{
 		data: new SlashCommandBuilder()
@@ -154,6 +161,26 @@ module.exports = [
 		async execute(interaction) {
 			await interaction.deferReply();
 			return interaction.editReply(`[SM] The current server time is ${sydneyTimeString()}`);
+		},
+	},
+	{
+		data: new SlashCommandBuilder()
+			.setName('setmap')
+			.setDescription('Change the current map (admin only)')
+			.addStringOption(option =>
+				option.setName('map')
+					.setDescription('Map name to change to')
+					.setRequired(true)),
+		async execute(interaction) {
+			await interaction.deferReply();
+			if (!isAdmin(interaction)) {
+				return interaction.editReply('[SM] You do not have permission to use this command.');
+			}
+			const map = interaction.options.getString('map');
+			return withRcon(interaction, async rcon => {
+				await rcon.command(`sm_map ${map}`, 5000);
+				return interaction.editReply(`[SM] Changing map to: ${map}`);
+			});
 		},
 	},
 ];
