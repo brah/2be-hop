@@ -4,7 +4,7 @@ const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v9');
 const config = require('./config.json');
 const fs = require('fs');
-const mysql = require('mysql');
+const db = require('./db');
 
 const applicationId = config.applicationId;
 const guildId = config.guildId;
@@ -51,7 +51,7 @@ client.on('interactionCreate', async interaction => {
 
 	if (command.requireDB) {
 		try {
-			await command.execute(interaction, con);
+			await command.execute(interaction, db.con);
 		}
 		catch (err) {
 			console.error(err);
@@ -68,39 +68,6 @@ client.on('interactionCreate', async interaction => {
 		}
 	}
 });
-
-// Database connection held in a let so dbConnect() can reassign it on reconnect
-let con;
-
-// Creates a fresh connection object, attaches the error handler, and connects.
-// Must create a new object each time — mysql connections are one-shot and cannot
-// be reconnected after end() is called.
-function dbConnect() {
-	con = mysql.createConnection({
-		host: config.dbhost,
-		database: config.dbname,
-		user: config.dbuser,
-		password: config.dbpassword,
-		port: config.dbport,
-	});
-
-	con.on('error', (err) => {
-		console.log(err);
-		console.log('Recreating database connection.');
-		dbConnect();
-	});
-
-	con.connect((err) => {
-		if (err) {
-			console.error(err);
-		}
-		else {
-			console.log('Connected to database.');
-		}
-	});
-}
-
-dbConnect();
 
 client.once('ready', () => {
 	console.log('Bot ready!');
