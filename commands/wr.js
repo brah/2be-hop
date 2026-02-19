@@ -19,26 +19,11 @@ module.exports = {
 				.setDescription('Normal/Bonus')
 				.addChoice('Normal', 0)
 				.addChoice('Bonus', 1))
-		.addIntegerOption(option =>
-			option.setName('style')
-				.setDescription('Style of the record')
-				.addChoice('Auto', 0)
-				.addChoice('Sideways', 1)
-				.addChoice('W-Only', 2)
-				.addChoice('Legit Scroll (100 AA)', 3)
-				.addChoice('Scroll (150 AA)', 4)
-				.addChoice('Half Sideways', 5)
-				.addChoice('D-Only', 6)
-				.addChoice('Segmented', 7)
-				.addChoice('Low Gravity', 8)
-				.addChoice('Slow Motion', 9)
-				.addChoice('Segmented Low Gravity', 10)
-				.addChoice('Easy Scroll', 11)
-				.addChoice('Parkour', 12)
-				.addChoice('Segmented Parkour', 13)
-				.addChoice('Speedrun', 14)
-				.addChoice('Autosync', 15)
-				.addChoice('TAS', 16)),
+		.addIntegerOption(option => {
+			option.setName('style').setDescription('Style of the record');
+			Object.entries(styleMap).forEach(([key, name]) => option.addChoice(name, Number.parseInt(key)));
+			return option;
+		}),
 	async execute(interaction, con) {
 		const mapName = interaction.options.getString('map');
 		const track = interaction.options.getInteger('track') || 0;
