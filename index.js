@@ -1,5 +1,4 @@
-// Import required dependencies
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, PermissionsBitField } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
 const config = require('./config.json');
@@ -9,7 +8,6 @@ const Rcon = require('srcds-rcon');
 const applicationId = config.applicationId;
 const guildId = config.guildId;
 
-// Instantiate a new Discord client with permitted intents
 // MESSAGE_CONTENT is a privileged intent — enable it in the Discord Developer Portal
 const client = new Client({
 	intents: [
@@ -19,33 +17,23 @@ const client = new Client({
 	],
 });
 
-// Create command containers
+// Load commands — a file may export a single command object or an array
 client.commands = new Collection();
-const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
 const commands = [];
-
-// Read command files and add them to containers
-// A file may export a single command object or an array of command objects
-for (const file of commandFiles) {
+for (const file of fs.readdirSync('./commands').filter(f => f.endsWith('.js'))) {
 	const loaded = require(`./commands/${file}`);
-	const commandList = Array.isArray(loaded) ? loaded : [loaded];
-	for (const command of commandList) {
+	for (const command of (Array.isArray(loaded) ? loaded : [loaded])) {
 		client.commands.set(command.data.name, command);
 		commands.push(command.data.toJSON());
 	}
 }
 
-// Create a Discord.js REST API object
 const rest = new REST({ version: '10' }).setToken(config.token);
 
-// Register slash commands with Discord's API
 (async () => {
 	try {
 		console.log('Refreshing slash commands');
-		await rest.put(
-			Routes.applicationGuildCommands(applicationId, guildId),
-			{ body: commands },
-		);
+		await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: commands });
 		console.log('Slash commands registered!');
 	}
 	catch (err) {
@@ -53,11 +41,10 @@ const rest = new REST({ version: '10' }).setToken(config.token);
 	}
 })();
 
-// Interaction handler
+// Slash command handler
 client.on('interactionCreate', async interaction => {
 	if (!interaction.isChatInputCommand()) return;
 	const command = client.commands.get(interaction.commandName);
-
 	if (!command) {
 		console.warn(`[index] no command found for: ${interaction.commandName}`);
 		return;
@@ -83,15 +70,15 @@ client.on('interactionCreate', async interaction => {
 	}
 });
 
-// Adapts a Discord message into the same interface the slash command execute()
-// functions expect (deferReply / editReply / options), so prefix and slash commands share code.
+// Adapts a Discord message into the same interface as slash command execute(),
+// so prefix and slash commands can share handler code.
 function createMessageAdapter(message, command) {
 	let sentMessage = null;
 	const args = message.content.trim().split(/\s+/).slice(1);
-	const adapter = {
+	return {
 		deferred: false,
 		replied:  false,
-		member: message.member,
+		member:   message.member,
 		async deferReply() {
 			this.deferred = true;
 			await message.channel.sendTyping();
@@ -118,7 +105,6 @@ function createMessageAdapter(message, command) {
 			},
 		},
 	};
-	return adapter;
 }
 
 const PREFIX = '.';
@@ -137,9 +123,7 @@ client.on('messageCreate', async message => {
 	}
 	catch (err) {
 		console.error(`[index] error in .${commandName}:`, err);
-		try {
-			await adapter.editReply('There was an error executing this command.');
-		}
+		try { await adapter.editReply('There was an error executing this command.'); }
 		catch {
 			// ignore
 		}
@@ -147,15 +131,17 @@ client.on('messageCreate', async message => {
 });
 
 // ---------------------------------------------------------------------------
-// Pub channel player-count poller
+// Server status poller (pub player count + current map)
 // ---------------------------------------------------------------------------
 const PUB_CHANNEL_ID = '864832817749819452';
+const MAP_CHANNEL_ID = '864834961508007946';
 // 5 minutes
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 let lastPubCount = null;
+let lastMapName = null;
 
-async function fetchHumanCount() {
+async function fetchServerStatus() {
 	if (!config.rconIP || !config.rconPass) return null;
 	const rcon = Rcon({
 		address:  `${config.rconIP}:${config.rconPort || 27015}`,
@@ -164,61 +150,80 @@ async function fetchHumanCount() {
 	try {
 		await rcon.connect();
 		const raw = await rcon.command('status', 5000);
-		const m = raw.match(/(\d+)\s*humans/i);
-		return m ? m[1] : '?';
+		return {
+			humanCount: raw.match(/(\d+)\s*humans/i)?.[1] ?? '?',
+			currentMap: raw.match(/^map\s*:\s*(\S+)/im)?.[1] ?? null,
+		};
 	}
 	catch (err) {
-		console.error('[pub-poller] RCON error:', err.message);
+		console.error('[poller] RCON error:', err.message);
 		return null;
 	}
 	finally {
-		try {
-			await rcon.disconnect();
-		}
+		try { await rcon.disconnect(); }
 		catch {
 			// ignore
 		}
 	}
 }
 
-async function updatePubChannel(discordClient) {
-	// Resolve channel from the guild cache to ensure proper guild context
-	const guild = discordClient.guilds.cache.find(g => g.channels.cache.has(PUB_CHANNEL_ID));
-	const channel = guild?.channels.cache.get(PUB_CHANNEL_ID) ?? null;
-	if (!channel) {
-		console.error('[pub-poller] Could not find channel', PUB_CHANNEL_ID, 'in any cached guild');
-		return;
+function resolveChannel(discordClient, channelId) {
+	const guild = discordClient.guilds.cache.find(g => g.channels.cache.has(channelId));
+	if (!guild) {
+		console.error('[poller] Could not find channel', channelId, 'in any cached guild');
+		return null;
 	}
-
-	const me = guild.members.me;
-	const perms = channel.permissionsFor(me);
-	const missing = ['ViewChannel', 'ManageChannels'].filter(p => !perms?.has(p));
+	const channel = guild.channels.cache.get(channelId);
+	const perms = channel.permissionsFor(guild.members.me);
+	const missing = [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ManageChannels]
+		.filter(p => !perms?.has(p));
 	if (missing.length) {
-		console.error('[pub-poller] Bot is missing channel permissions:', missing.join(', '));
-		return;
+		console.error(`[poller] Missing permissions on #${channel.name}:`, missing.map(p => PermissionsBitField.resolve(p).toString()).join(', '));
+		return null;
+	}
+	return channel;
+}
+
+async function pollChannels(discordClient) {
+	const status = await fetchServerStatus();
+	if (!status) return;
+
+	const { humanCount, currentMap } = status;
+
+	if (humanCount !== lastPubCount) {
+		const ch = resolveChannel(discordClient, PUB_CHANNEL_ID);
+		if (ch) {
+			try {
+				await ch.setName(`🍺 Pub: ${humanCount}`);
+				lastPubCount = humanCount;
+				console.log(`[poller] Pub → 🍺 Pub: ${humanCount}`);
+			}
+			catch (err) {
+				console.error(`[poller] Failed to rename pub channel — ${err.code}: ${err.message}`);
+			}
+		}
 	}
 
-	const humanCount = await fetchHumanCount();
-	if (humanCount === null) return;
-
-	// Skip the API call if the count hasn't changed
-	if (humanCount === lastPubCount) return;
-
-	try {
-		await discordClient.rest.patch(Routes.channel(PUB_CHANNEL_ID), { body: { name: `🍺 Pub: ${humanCount}` } });
-		lastPubCount = humanCount;
-	}
-	catch (err) {
-		console.error(`[pub-poller] Failed to update channel name — code:${err.code} status:${err.status} message:${err.message}`);
+	if (currentMap && currentMap !== lastMapName) {
+		const ch = resolveChannel(discordClient, MAP_CHANNEL_ID);
+		if (ch) {
+			try {
+				await ch.setName(`🗺️ ${currentMap}`);
+				lastMapName = currentMap;
+				console.log(`[poller] Map → 🗺️ ${currentMap}`);
+			}
+			catch (err) {
+				console.error(`[poller] Failed to rename map channel — ${err.code}: ${err.message}`);
+			}
+		}
 	}
 }
 
-client.once('clientReady', async () => {
+client.once('clientReady', () => {
 	console.log('Bot ready!');
-
-	void updatePubChannel(client).catch(err => console.error('[pub-poller] Unexpected error:', err));
+	void pollChannels(client).catch(err => console.error('[poller] Unexpected error:', err));
 	setInterval(
-		() => updatePubChannel(client).catch(err => console.error('[pub-poller] Unexpected error:', err)),
+		() => pollChannels(client).catch(err => console.error('[poller] Unexpected error:', err)),
 		POLL_INTERVAL_MS,
 	);
 });
