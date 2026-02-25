@@ -1,15 +1,51 @@
 const { SlashCommandBuilder } = require('discord.js');
 const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
-const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
 const SteamID = require('steamid');
-const { fetchSteamAvatar } = require('../utils');
+const { SOURCEJUMP_API_URL, fetchSteamAvatar } = require('../utils');
 
+async function buildRecordEmbed(record, color, label, timeValue) {
+	let avatarUrl = null;
+	let steamID64 = null;
+	if (record.steamid) {
+		try {
+			steamID64 = new SteamID(record.steamid).getSteamID64();
+			avatarUrl = await fetchSteamAvatar(steamID64);
+		}
+		catch {
+			// no avatar, continue
+		}
+	}
+	const profileUrl = steamID64
+		? `https://steamcommunity.com/profiles/${steamID64}`
+		: null;
+	return {
+		color,
+		description: label,
+		author: {
+			name: record.name.toString(),
+			...(profileUrl ? { url: profileUrl } : {}),
+			...(avatarUrl ? { icon_url: avatarUrl } : {}),
+		},
+		title: record.map.toString(),
+		fields: [
+			{ name: 'Time', value: timeValue, inline: true },
+			{ name: 'SJ', value: `[link](https://sourcejump.net/records/map/${record.map})`, inline: true },
+			{ name: '\u200b', value: '\u200b', inline: true },
+			{ name: 'Jumps', value: record.jumps.toString(), inline: true },
+			{ name: 'Sync', value: Number(record.sync).toFixed(2) + '%', inline: true },
+			{ name: 'Strafes', value: record.strafes.toString(), inline: true },
+			{ name: 'Run Date', value: record.date.toString(), inline: true },
+			{ name: 'Server', value: record.hostname.toString(), inline: true },
+		],
+		timestamp: new Date(),
+	};
+}
 
 module.exports = {
 	data: new SlashCommandBuilder()
 		.setName('wr')
-		.setDescription('Retrieves the SpaceBar Warriors server world record for the map')
+		.setDescription('Retrieves server and global world records for the map')
 		.addStringOption(option =>
 			option.setName('map')
 				.setDescription('Name of the map')
@@ -34,86 +70,27 @@ module.exports = {
 
 				const records = JSON.parse(body);
 				const serverRecords = records.filter(r => r.ip === config.serverIP);
+				const globalRecord = records[0];
 
-				if (!serverRecords.length) {
-					return interaction.editReply({ content: `No times found for ${mapName} on SpaceBar Warriors` });
+				const embeds = [];
+
+				if (serverRecords.length > 0) {
+					const wr = serverRecords[0];
+					const t = wr.time.toString();
+					const timeValue = wr.wrDif === 'World Record'
+						? `⭐ ${t}`
+						: wr.wrDif ? `${t} (${wr.wrDif})` : t;
+					embeds.push(await buildRecordEmbed(wr, 0x3498DB, 'Server WR', timeValue));
+				}
+				else {
+					embeds.push({ description: `No server times found for ${mapName} on SpaceBar Warriors`, color: 0x3498DB });
 				}
 
-				const wr = serverRecords[0];
-
-				let avatarUrl = null;
-				let steamID64 = null;
-				if (wr.steamid) {
-					try {
-						steamID64 = new SteamID(wr.steamid).getSteamID64();
-						avatarUrl = await fetchSteamAvatar(steamID64);
-					}
-					catch {
-						// no avatar, continue
-					}
+				if (globalRecord) {
+					embeds.push(await buildRecordEmbed(globalRecord, 0x2ECC71, 'Global WR', globalRecord.time.toString()));
 				}
 
-				const profileUrl = steamID64
-					? `https://steamcommunity.com/profiles/${steamID64}`
-					: null;
-
-				const embed = {
-					color: 0x3498DB,
-					author: {
-						name: wr.name.toString(),
-						...(profileUrl ? { url: profileUrl } : {}),
-						...(avatarUrl ? { icon_url: avatarUrl } : {}),
-					},
-					title: wr.map.toString(),
-					fields: [
-						{
-							name: 'Time',
-							value: (() => {
-								const t = wr.time.toString();
-								if (wr.wrDif === 'World Record') return `⭐ ${t}`;
-								return wr.wrDif ? `${t} (${wr.wrDif})` : t;
-							})(),
-							inline: true,
-						},
-						{
-							name: 'SJ',
-							value: `[link](https://sourcejump.net/records/map/${wr.map})`,
-							inline: true,
-						},
-						{
-							name: '\u200b',
-							value: '\u200b',
-							inline: true,
-						},
-						{
-							name: 'Jumps',
-							value: wr.jumps.toString(),
-							inline: true,
-						},
-						{
-							name: 'Sync',
-							value: Number(wr.sync).toFixed(2) + '%',
-							inline: true,
-						},
-						{
-							name: 'Strafes',
-							value: wr.strafes.toString(),
-							inline: true,
-						},
-						{
-							name: 'Run Date',
-							value: wr.date.toString(),
-							inline: true,
-						},
-						{
-							name: 'Server',
-							value: wr.hostname.toString(),
-							inline: true,
-						},
-					],
-					timestamp: new Date(),
-				};
-				return interaction.editReply({ embeds: [embed] });
+				return interaction.editReply({ embeds });
 			})
 			.catch(err => {
 				console.error(err);

@@ -3,7 +3,7 @@ const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
 const config = require('./config.json');
 const fs = require('node:fs');
-const Rcon = require('srcds-rcon');
+const Rcon = require('rcon-srcds').default;
 
 const applicationId = config.applicationId;
 const guildId = config.guildId;
@@ -67,6 +67,50 @@ client.on('interactionCreate', async interaction => {
 		console.error(`[index] error in /${interaction.commandName}:`, err);
 		try { await replyWithError(); }
 		catch (error_) { console.error('[index] failed to send error reply:', error_); }
+	}
+});
+
+// Button handler — re-runs a command ephemerally from a button click
+client.on('interactionCreate', async interaction => {
+	if (!interaction.isButton()) return;
+
+	const colonIdx = interaction.customId.indexOf(':');
+	if (colonIdx === -1) return;
+
+	const action = interaction.customId.slice(0, colonIdx);
+	const mapName = interaction.customId.slice(colonIdx + 1);
+
+	const command = client.commands.get(action);
+	if (!command) return;
+
+	// Mimics a slash interaction but ephemeral; no followUp so buttons aren't re-added
+	const adapter = {
+		deferred: false,
+		replied:  false,
+		member:   interaction.member,
+		async deferReply() {
+			this.deferred = true;
+			await interaction.deferReply();
+		},
+		async editReply(content) {
+			return interaction.editReply(content);
+		},
+		options: {
+			getString(name) { return name === 'map' ? mapName : null; },
+			getInteger() { return null; },
+		},
+	};
+
+	try {
+		await command.execute(adapter);
+	}
+	catch (err) {
+		console.error(`[index] error in button ${action}:`, err);
+		try {
+			if (adapter.deferred) await interaction.editReply({ content: 'There was an error.' });
+			else await interaction.reply({ content: 'There was an error.', ephemeral: true });
+		}
+		catch (error_) { console.error('[index] failed to send button error reply:', error_); }
 	}
 });
 
@@ -140,34 +184,68 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 let lastPubCount = null;
 let lastMapName = null;
+let discordClient = null;
 
-async function fetchServerStatus() {
-	if (!config.rconIP || !config.rconPass) return null;
-	const rcon = Rcon({
-		address:  `${config.rconIP}:${config.rconPort || 27015}`,
-		password: config.rconPass,
+// Persistent RCON connection with exponential-backoff reconnection
+let rcon = null;
+let rconReady = false;
+let rconReconnectTimer = null;
+let rconReconnectDelay = 5_000;
+const RCON_RECONNECT_MAX = 60_000;
+
+async function rconConnect() {
+	if (rconReconnectTimer) {
+		clearTimeout(rconReconnectTimer);
+		rconReconnectTimer = null;
+	}
+	rcon = new Rcon({
+		host:     config.rconIP,
+		port:     config.rconPort || 27015,
+		encoding: 'utf8',
+		timeout:  5000,
 	});
 	try {
-		await rcon.connect();
-		const raw = await rcon.command('status', 5000);
+		await rcon.authenticate(config.rconPass);
+		rconReady = true;
+		rconReconnectDelay = 5_000;
+		console.log('[rcon] Connected');
+		if (discordClient) pollChannels().catch(Function.prototype);
+	}
+	catch (err) {
+		rconReady = false;
+		console.error('[rcon] Connection failed:', err.message);
+		scheduleRconReconnect();
+	}
+}
+
+function scheduleRconReconnect() {
+	if (rconReconnectTimer) return;
+	console.log(`[rcon] Reconnecting in ${rconReconnectDelay / 1000}s`);
+	rconReconnectTimer = setTimeout(() => {
+		rconReconnectTimer = null;
+		rconConnect();
+	}, rconReconnectDelay);
+	rconReconnectDelay = Math.min(rconReconnectDelay * 2, RCON_RECONNECT_MAX);
+}
+
+async function fetchServerStatus() {
+	if (!rconReady) return null;
+	try {
+		const raw = await rcon.execute('status');
 		return {
 			humanCount: raw.match(/(\d+)\s*humans/i)?.[1] ?? '?',
 			currentMap: raw.match(/^map\s*:\s*(\S+)/im)?.[1] ?? null,
 		};
 	}
 	catch (err) {
-		console.error('[poller] RCON error:', err.message);
+		console.error('[rcon] Lost connection:', err.message);
+		rconReady = false;
+		scheduleRconReconnect();
 		return null;
-	}
-	finally {
-		try { await rcon.disconnect(); }
-		catch {
-			// ignore
-		}
 	}
 }
 
-function resolveChannel(discordClient, channelId) {
+function resolveChannel(channelId) {
 	const guild = discordClient.guilds.cache.find(g => g.channels.cache.has(channelId));
 	if (!guild) {
 		console.error('[poller] Could not find channel', channelId, 'in any cached guild');
@@ -184,14 +262,14 @@ function resolveChannel(discordClient, channelId) {
 	return channel;
 }
 
-async function pollChannels(discordClient) {
+async function pollChannels() {
 	const status = await fetchServerStatus();
 	if (!status) return;
 
 	const { humanCount, currentMap } = status;
 
 	if (humanCount !== lastPubCount) {
-		const ch = resolveChannel(discordClient, PUB_CHANNEL_ID);
+		const ch = resolveChannel(PUB_CHANNEL_ID);
 		if (ch) {
 			try {
 				await ch.setName(`🍺 Pub: ${humanCount}`);
@@ -205,7 +283,7 @@ async function pollChannels(discordClient) {
 	}
 
 	if (currentMap && currentMap !== lastMapName) {
-		const ch = resolveChannel(discordClient, MAP_CHANNEL_ID);
+		const ch = resolveChannel(MAP_CHANNEL_ID);
 		if (ch) {
 			try {
 				await ch.setName(`🗺️ ${currentMap}`);
@@ -219,13 +297,16 @@ async function pollChannels(discordClient) {
 	}
 }
 
-client.once('clientReady', () => {
+client.once('clientReady', c => {
 	console.log('Bot ready!');
-	void pollChannels(client).catch(err => console.error('[poller] Unexpected error:', err));
-	setInterval(
-		() => pollChannels(client).catch(err => console.error('[poller] Unexpected error:', err)),
-		POLL_INTERVAL_MS,
-	);
+	discordClient = c;
+	if (config.rconIP && config.rconPass) {
+		rconConnect();
+		setInterval(
+			() => pollChannels().catch(err => console.error('[poller] Unexpected error:', err)),
+			POLL_INTERVAL_MS,
+		);
+	}
 });
 
 client.login(config.token);

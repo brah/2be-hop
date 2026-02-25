@@ -1,16 +1,9 @@
 const { SlashCommandBuilder } = require('discord.js');
 const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
-const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
-const apiOptions = {
-	method: 'GET',
-	headers: {
-		'api-key': config.SJ_API_KEY,
-	},
-};
 const SteamID = require('steamid');
 const SteamIDResolver = require('steamid-resolver');
-const { fetchSteamAvatar } = require('../utils');
+const { SOURCEJUMP_API_URL, fetchSteamAvatar } = require('../utils');
 
 module.exports = {
 	data: new SlashCommandBuilder()
@@ -23,6 +16,13 @@ module.exports = {
 	async execute(interaction) {
 		const profile = interaction.options.getString('user');
 		await interaction.deferReply();
+
+		const apiOptions = {
+			method: 'GET',
+			headers: {
+				'api-key': config.SJ_API_KEY,
+			},
+		};
 
 		let steamID64Raw;
 		try {
@@ -39,12 +39,11 @@ module.exports = {
 		return fetch(`${SOURCEJUMP_API_URL}/players/banned`, apiOptions)
 			.then(response => response.text())
 			.then(async body => {
-				// Check if the body is empty (empty array [] has string length 2)
 				if (body.length === 2) {
 					return interaction.editReply({ content: 'Either Tony has unbanned all players, or there is an issue with the API. Try again later.' });
 				}
-				body = JSON.parse(body);
-				for (const element of body) {
+				const players = JSON.parse(body);
+				for (const element of players) {
 					if (element.steamid === id) {
 						let avatarUrl = null;
 						try {
@@ -98,7 +97,6 @@ module.exports = {
 function getSteamID(profile) {
 	return new Promise((resolve, reject) => {
 		if (profile.includes('steamcommunity.com/profiles')) {
-			// split url, check for trailing slash, and use the end of the url as steamid
 			const parts = profile.split('/').filter(p => p !== '');
 			resolve(parts[parts.length - 1]);
 		}

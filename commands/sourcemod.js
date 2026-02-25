@@ -1,13 +1,14 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
-const Rcon = require('srcds-rcon');
+const Rcon = require('rcon-srcds').default;
 
 function createRcon() {
-	// srcds-rcon expects the port embedded in the address string as "IP:PORT"
-	return Rcon({
-		address:  `${config.rconIP}:${config.rconPort || 27015}`,
-		password: config.rconPass,
+	return new Rcon({
+		host:     config.rconIP,
+		port:     config.rconPort || 27015,
+		encoding: 'utf8',
+		timeout:  5000,
 	});
 }
 
@@ -18,7 +19,7 @@ async function withRcon(interaction, fn) {
 	}
 	const rcon = createRcon();
 	try {
-		await rcon.connect();
+		await rcon.authenticate(config.rconPass);
 		return await fn(rcon);
 	}
 	catch (err) {
@@ -103,7 +104,7 @@ module.exports = [
 		async execute(interaction) {
 			await interaction.deferReply();
 			return withRcon(interaction, async rcon => {
-				const raw = await rcon.command('status', 5000);
+				const raw = await rcon.execute('status');
 				const { currentMap, humanCount, maxPlayers, players } = parseStatus(raw);
 				const playerList = players.length > 0
 					? players.map(p => `• ${p.name} (${p.ping}ms)`).join('\n')
@@ -119,9 +120,22 @@ module.exports = [
 		async execute(interaction) {
 			await interaction.deferReply();
 			return withRcon(interaction, async rcon => {
-				const raw = await rcon.command('status', 5000);
+				const raw = await rcon.execute('status');
 				const { currentMap } = parseStatus(raw);
-				return interaction.editReply(`[SM] Current Map: ${currentMap}`);
+				await interaction.editReply(`[SM] Current Map: ${currentMap}`);
+				if (typeof interaction.followUp === 'function') {
+					const row = new ActionRowBuilder().addComponents(
+						new ButtonBuilder()
+							.setCustomId(`global:${currentMap}`)
+							.setLabel('Global record')
+							.setStyle(ButtonStyle.Secondary),
+						new ButtonBuilder()
+							.setCustomId(`wr:${currentMap}`)
+							.setLabel('Server WR')
+							.setStyle(ButtonStyle.Secondary),
+					);
+					await interaction.followUp({ components: [row], ephemeral: true }).catch(Function.prototype);
+				}
 			});
 		},
 	},
@@ -132,7 +146,7 @@ module.exports = [
 		async execute(interaction) {
 			await interaction.deferReply();
 			return withRcon(interaction, async rcon => {
-				const raw = await rcon.command('sm_nextmap', 5000);
+				const raw = await rcon.execute('sm_nextmap');
 				// Format: "sm_nextmap" = "bhop_axn_easy" ( def. "" )
 				const match = raw.match(/"sm_nextmap"\s*=\s*"([^"]+)"/);
 				const nextMap = match ? match[1] : raw.trim() || 'Unknown';
@@ -147,7 +161,7 @@ module.exports = [
 		async execute(interaction) {
 			await interaction.deferReply();
 			return withRcon(interaction, async rcon => {
-				const raw = await rcon.command('timeleft', 5000);
+				const raw = await rcon.execute('timeleft');
 				// Extract the first MM:SS or H:MM:SS time pattern from the response
 				const match = raw.match(/(\d+:\d+(?::\d+)?)/);
 				const timeLeft = match ? match[1] : raw.trim() || 'Unknown';
@@ -179,7 +193,7 @@ module.exports = [
 			}
 			const map = interaction.options.getString('map');
 			return withRcon(interaction, async rcon => {
-				await rcon.command(`changelevel ${map}`, 5000);
+				await rcon.execute(`changelevel ${map}`);
 				return interaction.editReply(`[SM] Changing map to: ${map}`);
 			});
 		},

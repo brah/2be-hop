@@ -1,9 +1,8 @@
-const { SlashCommandBuilder } = require('discord.js');
-const path = require('path');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
-const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
 const SteamID = require('steamid');
-const { fetchSteamAvatar } = require('../utils');
+const { SOURCEJUMP_API_URL, fetchSteamAvatar } = require('../utils');
 
 
 module.exports = {
@@ -104,7 +103,16 @@ module.exports = {
 					],
 					timestamp: new Date(),
 				};
-				return interaction.editReply({ embeds: [embed] });
+				await interaction.editReply({ embeds: [embed] });
+				if (typeof interaction.followUp === 'function') {
+					const row = new ActionRowBuilder().addComponents(
+						new ButtonBuilder()
+							.setCustomId(`wr:${record.map}`)
+							.setLabel('Server WR')
+							.setStyle(ButtonStyle.Secondary),
+					);
+					await interaction.followUp({ components: [row], ephemeral: true }).catch(Function.prototype);
+				}
 			})
 			.catch(err => {
 				console.error(err);
