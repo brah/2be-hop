@@ -3,18 +3,8 @@ const path = require('path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
 const SteamID = require('steamid');
-const SteamIDResolver = require('steamid-resolver');
+const { fetchSteamAvatar } = require('../utils');
 
-function formatTime(seconds) {
-	const totalSeconds = Math.floor(seconds);
-	const hours = Math.floor(totalSeconds / 3600);
-	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const secs = totalSeconds % 60;
-	if (hours < 1) {
-		return minutes.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
-	}
-	return hours.toString().padStart(2, '0') + ':' + minutes.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
-}
 
 module.exports = {
 	data: new SlashCommandBuilder()
@@ -43,21 +33,15 @@ module.exports = {
 					return interaction.editReply({ content: `No times found for ${mapName}` });
 				}
 
-				// Parse the response data
-				body = JSON.parse(body);
-				body = body[0];
+				const record = JSON.parse(body)[0];
 
 				// Attempt to fetch Steam avatar
 				let avatarUrl = null;
 				let steamID64 = null;
-				if (body.steamid) {
+				if (record.steamid) {
 					try {
-						steamID64 = new SteamID(body.steamid).getSteamID64();
-						avatarUrl = await new Promise((resolve) => {
-							SteamIDResolver.steamID64ToFullInfo(steamID64, (err, info) => {
-								resolve((err || !info) ? null : (info.avatarMedium?.[0] || null));
-							});
-						});
+						steamID64 = new SteamID(record.steamid).getSteamID64();
+						avatarUrl = await fetchSteamAvatar(steamID64);
 					}
 					catch {
 						// no avatar, continue
@@ -71,20 +55,20 @@ module.exports = {
 				const embed = {
 					color: 0x3498DB,
 					author: {
-						name: body.name.toString(),
+						name: record.name.toString(),
 						...(profileUrl ? { url: profileUrl } : {}),
 						...(avatarUrl ? { icon_url: avatarUrl } : {}),
 					},
-					title: body.map.toString(),
+					title: record.map.toString(),
 					fields: [
 						{
 							name: 'Time',
-							value: typeof body.time === 'number' ? formatTime(body.time) : body.time.toString(),
+							value: record.time.toString(),
 							inline: true,
 						},
 						{
 							name: 'SJ',
-							value: `[link](https://sourcejump.net/records/map/${body.map})`,
+							value: `[link](https://sourcejump.net/records/map/${record.map})`,
 							inline: true,
 						},
 						{
@@ -94,27 +78,27 @@ module.exports = {
 						},
 						{
 							name: 'Jumps',
-							value: body.jumps.toString(),
+							value: record.jumps.toString(),
 							inline: true,
 						},
 						{
 							name: 'Sync',
-							value: Number(body.sync).toFixed(2) + '%',
+							value: Number(record.sync).toFixed(2) + '%',
 							inline: true,
 						},
 						{
 							name: 'Strafes',
-							value: body.strafes.toString(),
+							value: record.strafes.toString(),
 							inline: true,
 						},
 						{
 							name: 'Run Date',
-							value: body.date.toString(),
+							value: record.date.toString(),
 							inline: true,
 						},
 						{
 							name: 'Server',
-							value: body.hostname.toString(),
+							value: record.hostname.toString(),
 							inline: true,
 						},
 					],

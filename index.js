@@ -3,7 +3,8 @@ const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
 const config = require('./config.json');
-const fs = require('fs');
+const fs = require('node:fs');
+const Rcon = require('srcds-rcon');
 
 const applicationId = config.applicationId;
 const guildId = config.guildId;
@@ -78,7 +79,7 @@ client.on('interactionCreate', async interaction => {
 	catch (err) {
 		console.error(`[index] error in /${interaction.commandName}:`, err);
 		try { await replyWithError(); }
-		catch (replyErr) { console.error('[index] failed to send error reply:', replyErr); }
+		catch (error_) { console.error('[index] failed to send error reply:', error_); }
 	}
 });
 
@@ -90,6 +91,7 @@ function createMessageAdapter(message, command) {
 	const adapter = {
 		deferred: false,
 		replied:  false,
+		member: message.member,
 		async deferReply() {
 			this.deferred = true;
 			await message.channel.sendTyping();
@@ -112,7 +114,7 @@ function createMessageAdapter(message, command) {
 			getInteger(name) {
 				const idx = command.data.options?.findIndex(o => o.name === name) ?? -1;
 				const val = args[idx];
-				return (idx >= 0 && val !== undefined) ? parseInt(val, 10) : null;
+				return (idx >= 0 && val !== undefined) ? Number.parseInt(val, 10) : null;
 			},
 		},
 	};
@@ -144,8 +146,81 @@ client.on('messageCreate', async message => {
 	}
 });
 
-client.once('clientReady', () => {
+// ---------------------------------------------------------------------------
+// Pub channel player-count poller
+// ---------------------------------------------------------------------------
+const PUB_CHANNEL_ID = '864832817749819452';
+// 5 minutes
+const POLL_INTERVAL_MS = 5 * 60 * 1000;
+
+let lastPubCount = null;
+
+async function fetchHumanCount() {
+	if (!config.rconIP || !config.rconPass) return null;
+	const rcon = Rcon({
+		address:  `${config.rconIP}:${config.rconPort || 27015}`,
+		password: config.rconPass,
+	});
+	try {
+		await rcon.connect();
+		const raw = await rcon.command('status', 5000);
+		const m = raw.match(/(\d+)\s*humans/i);
+		return m ? m[1] : '?';
+	}
+	catch (err) {
+		console.error('[pub-poller] RCON error:', err.message);
+		return null;
+	}
+	finally {
+		try {
+			await rcon.disconnect();
+		}
+		catch {
+			// ignore
+		}
+	}
+}
+
+async function updatePubChannel(discordClient) {
+	// Resolve channel from the guild cache to ensure proper guild context
+	const guild = discordClient.guilds.cache.find(g => g.channels.cache.has(PUB_CHANNEL_ID));
+	const channel = guild?.channels.cache.get(PUB_CHANNEL_ID) ?? null;
+	if (!channel) {
+		console.error('[pub-poller] Could not find channel', PUB_CHANNEL_ID, 'in any cached guild');
+		return;
+	}
+
+	const me = guild.members.me;
+	const perms = channel.permissionsFor(me);
+	const missing = ['ViewChannel', 'ManageChannels'].filter(p => !perms?.has(p));
+	if (missing.length) {
+		console.error('[pub-poller] Bot is missing channel permissions:', missing.join(', '));
+		return;
+	}
+
+	const humanCount = await fetchHumanCount();
+	if (humanCount === null) return;
+
+	// Skip the API call if the count hasn't changed
+	if (humanCount === lastPubCount) return;
+
+	try {
+		await discordClient.rest.patch(Routes.channel(PUB_CHANNEL_ID), { body: { name: `🍺 Pub: ${humanCount}` } });
+		lastPubCount = humanCount;
+	}
+	catch (err) {
+		console.error(`[pub-poller] Failed to update channel name — code:${err.code} status:${err.status} message:${err.message}`);
+	}
+}
+
+client.once('clientReady', async () => {
 	console.log('Bot ready!');
+
+	void updatePubChannel(client).catch(err => console.error('[pub-poller] Unexpected error:', err));
+	setInterval(
+		() => updatePubChannel(client).catch(err => console.error('[pub-poller] Unexpected error:', err)),
+		POLL_INTERVAL_MS,
+	);
 });
 
 client.login(config.token);

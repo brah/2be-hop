@@ -1,5 +1,5 @@
 const { SlashCommandBuilder } = require('discord.js');
-const path = require('path');
+const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const Rcon = require('srcds-rcon');
 
@@ -68,32 +68,31 @@ function parseStatus(raw) {
 			const ping = rest[4] || '?';
 			return { name, ping };
 		})
-		.filter(p => p.ping !== '?' && !isNaN(Number(p.ping)));
+		.filter(p => p.ping !== '?' && !Number.isNaN(Number(p.ping)));
 
 	return { currentMap, humanCount, maxPlayers, players };
 }
 
-// Returns the current Sydney time formatted as SourceMod would display it.
+// Returns the current Sydney time in the format: "The time is: 2:28PM Friday 20 February, 2026"
 function sydneyTimeString() {
 	const parts = new Intl.DateTimeFormat('en-US', {
 		timeZone: 'Australia/Sydney',
-		month:    '2-digit',
-		day:      '2-digit',
+		weekday:  'long',
+		day:      'numeric',
+		month:    'long',
 		year:     'numeric',
-		hour:     '2-digit',
+		hour:     'numeric',
 		minute:   '2-digit',
-		second:   '2-digit',
-		hour12:   false,
+		hour12:   true,
 	}).formatToParts(new Date());
-	const get = type => parts.find(p => p.type === type)?.value ?? '00';
-	return `${get('month')}/${get('day')}/${get('year')} - ${get('hour')}:${get('minute')}:${get('second')}`;
+	const get = type => parts.find(p => p.type === type)?.value ?? '';
+	return `The time is: ${get('hour')}:${get('minute')}${get('dayPeriod')} ${get('weekday')} ${get('day')} ${get('month')}, ${get('year')}`;
 }
 
 function isAdmin(interaction) {
 	const adminRoles = config.adminRoles;
 	if (!Array.isArray(adminRoles) || adminRoles.length === 0) return false;
-	const memberRoles = interaction.member._roles ?? [];
-	return adminRoles.some(id => memberRoles.includes(String(id)));
+	return adminRoles.some(id => interaction.member.roles.cache.has(String(id)));
 }
 
 module.exports = [
@@ -162,7 +161,7 @@ module.exports = [
 			.setDescription('Show the current server time'),
 		async execute(interaction) {
 			await interaction.deferReply();
-			return interaction.editReply(`[SM] The current server time is ${sydneyTimeString()}`);
+			return interaction.editReply(sydneyTimeString());
 		},
 	},
 	{
@@ -180,7 +179,7 @@ module.exports = [
 			}
 			const map = interaction.options.getString('map');
 			return withRcon(interaction, async rcon => {
-				await rcon.command(`sm_map ${map}`, 5000);
+				await rcon.command(`changelevel ${map}`, 5000);
 				return interaction.editReply(`[SM] Changing map to: ${map}`);
 			});
 		},

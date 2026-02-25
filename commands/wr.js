@@ -1,21 +1,10 @@
 const { SlashCommandBuilder } = require('discord.js');
-const path = require('path');
+const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const SOURCEJUMP_API_URL = 'https://sourcejump.net/api';
-const SERVER_IP = '203.209.209.92:27015';
 const SteamID = require('steamid');
-const SteamIDResolver = require('steamid-resolver');
+const { fetchSteamAvatar } = require('../utils');
 
-function formatTime(seconds) {
-	const totalSeconds = Math.floor(seconds);
-	const hours = Math.floor(totalSeconds / 3600);
-	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const secs = totalSeconds % 60;
-	if (hours < 1) {
-		return minutes.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
-	}
-	return hours.toString().padStart(2, '0') + ':' + minutes.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
-}
 
 module.exports = {
 	data: new SlashCommandBuilder()
@@ -44,7 +33,7 @@ module.exports = {
 				}
 
 				const records = JSON.parse(body);
-				const serverRecords = records.filter(r => r.ip === SERVER_IP);
+				const serverRecords = records.filter(r => r.ip === config.serverIP);
 
 				if (!serverRecords.length) {
 					return interaction.editReply({ content: `No times found for ${mapName} on SpaceBar Warriors` });
@@ -57,11 +46,7 @@ module.exports = {
 				if (wr.steamid) {
 					try {
 						steamID64 = new SteamID(wr.steamid).getSteamID64();
-						avatarUrl = await new Promise((resolve) => {
-							SteamIDResolver.steamID64ToFullInfo(steamID64, (err, info) => {
-								resolve((err || !info) ? null : (info.avatarMedium?.[0] || null));
-							});
-						});
+						avatarUrl = await fetchSteamAvatar(steamID64);
 					}
 					catch {
 						// no avatar, continue
@@ -84,7 +69,7 @@ module.exports = {
 						{
 							name: 'Time',
 							value: (() => {
-								const t = typeof wr.time === 'number' ? formatTime(wr.time) : wr.time.toString();
+								const t = wr.time.toString();
 								if (wr.wrDif === 'World Record') return `⭐ ${t}`;
 								return wr.wrDif ? `${t} (${wr.wrDif})` : t;
 							})(),
