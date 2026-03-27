@@ -9,5 +9,6 @@
 	"adminRoles": [],
 	"SJ_API_KEY": "SJPublicAPIKey",
 	"logWebhook": "YOUR_LOG_WEBHOOK_URL",
-	"clearGuildCommandsOnStartup": true
+	"clearGuildCommandsOnStartup": true,
+	"diagnosticCommandLogging": false
 }

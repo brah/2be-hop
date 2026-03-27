@@ -13,6 +13,7 @@ const { isNonEmptyString } = require('./utils');
 const applicationId = config.applicationId;
 const commandsDirectory = path.join(__dirname, 'commands');
 const clearGuildCommandsOnStartup = config.clearGuildCommandsOnStartup !== false;
+const diagnosticCommandLogging = config.diagnosticCommandLogging === true;
 
 const client = new Client({
 	intents: [
@@ -30,6 +31,10 @@ const rest = isNonEmptyString(config.token)
 
 client.on('interactionCreate', async interaction => {
 	if (!interaction.isChatInputCommand()) return;
+	const commandContext = `/${interaction.commandName}`;
+	const startedAt = Date.now();
+
+	logInteractionReceipt(commandContext, interaction);
 
 	if (!interaction.inGuild()) {
 		await replyToInteraction(interaction, {
@@ -51,14 +56,19 @@ client.on('interactionCreate', async interaction => {
 
 	try {
 		await command.execute(interaction);
+		logInteractionCompletion(commandContext, interaction, startedAt);
 	}
 	catch (err) {
-		await handleInteractionCommandError(`/${interaction.commandName}`, interaction, err);
+		await handleInteractionCommandError(commandContext, interaction, err, interaction.deferred || interaction.replied, startedAt);
 	}
 });
 
 client.on('interactionCreate', async interaction => {
 	if (!interaction.isButton()) return;
+	const buttonContext = `button ${interaction.customId}`;
+	const startedAt = Date.now();
+
+	logInteractionReceipt(buttonContext, interaction);
 
 	if (!interaction.inGuild()) {
 		await replyToInteraction(interaction, {
@@ -97,9 +107,10 @@ client.on('interactionCreate', async interaction => {
 	const adapter = createButtonAdapter(interaction, mapName);
 	try {
 		await command.execute(adapter);
+		logInteractionCompletion(buttonContext, interaction, startedAt, adapter);
 	}
 	catch (err) {
-		await handleInteractionCommandError(`button ${action}`, interaction, err, adapter.deferred);
+		await handleInteractionCommandError(buttonContext, interaction, err, adapter.deferred, startedAt, adapter);
 	}
 });
 
@@ -438,13 +449,13 @@ async function replyWithError(interaction, alreadyDeferred = interaction.deferre
 	await replyToInteraction(interaction, payload);
 }
 
-async function handleInteractionCommandError(context, interaction, err, alreadyDeferred = interaction.deferred || interaction.replied) {
+async function handleInteractionCommandError(context, interaction, err, alreadyDeferred = interaction.deferred || interaction.replied, startedAt = Date.now(), adapter = null) {
 	if (isHandledInteractionLifecycleError(err)) {
-		console.warn(`[index] Ignoring ${context} failure caused by an expired or already-handled interaction: ${describeDiscordApiError(err)}`);
+		console.warn(`[index] Ignoring ${context} failure caused by an expired or already-handled interaction: ${describeDiscordApiError(err)} (${formatInteractionDiagnostics(interaction, startedAt, adapter)})`);
 		return;
 	}
 
-	console.error(`[index] Error in ${context}:`, err);
+	console.error(`[index] Error in ${context} (${formatInteractionDiagnostics(interaction, startedAt, adapter)}):`, err);
 	await replyWithError(interaction, alreadyDeferred);
 }
 
@@ -462,6 +473,39 @@ function describeDiscordApiError(err) {
 	const code = getDiscordApiErrorCode(err);
 	if (code === null) return err?.message || 'Unknown Discord API error';
 	return `${code} ${err?.message || 'Discord API error'}`;
+}
+
+function getInteractionAgeMs(interaction) {
+	return typeof interaction?.createdTimestamp === 'number'
+		? Math.max(Date.now() - interaction.createdTimestamp, 0)
+		: null;
+}
+
+function formatInteractionDiagnostics(interaction, startedAt, adapter = null) {
+	const ageMs = getInteractionAgeMs(interaction);
+	const elapsedMs = Math.max(Date.now() - startedAt, 0);
+	const deferred = adapter?.deferred ?? interaction?.deferred ?? false;
+	const replied = adapter?.replied ?? interaction?.replied ?? false;
+	const parts = [
+		`id=${interaction?.id || 'unknown'}`,
+		`elapsed=${elapsedMs}ms`,
+		`deferred=${deferred}`,
+		`replied=${replied}`,
+	];
+	if (ageMs !== null) {
+		parts.push(`age=${ageMs}ms`);
+	}
+	return parts.join(', ');
+}
+
+function logInteractionReceipt(context, interaction) {
+	if (!diagnosticCommandLogging) return;
+	console.log(`[diag] Received ${context} (${formatInteractionDiagnostics(interaction, Date.now())})`);
+}
+
+function logInteractionCompletion(context, interaction, startedAt, adapter = null) {
+	if (!diagnosticCommandLogging) return;
+	console.log(`[diag] Completed ${context} (${formatInteractionDiagnostics(interaction, startedAt, adapter)})`);
 }
 
 async function shutdown(signal) {
