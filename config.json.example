@@ -5,6 +5,9 @@
 	"rconIP": "RCON_IP",
 	"rconPass": "RCON_PASS",
 	"rconPort": 27015,
+	"serverIP": "GAME_SERVER_IP:27015",
 	"adminRoles": [],
-	"SJ_API_KEY": "SJPublicAPIKey"
+	"SJ_API_KEY": "SJPublicAPIKey",
+	"logWebhook": "YOUR_LOG_WEBHOOK_URL",
+	"clearGuildCommandsOnStartup": true
 }

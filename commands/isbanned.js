@@ -1,78 +1,49 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, InteractionContextType } = require('discord.js');
 const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const SteamID = require('steamid');
 const SteamIDResolver = require('steamid-resolver');
-const { SOURCEJUMP_API_URL, fetchSteamAvatar } = require('../utils');
+const {
+	fetchSourceJumpJson,
+	fetchSteamAvatar,
+	safeString,
+} = require('../utils');
 
 module.exports = {
 	data: new SlashCommandBuilder()
 		.setName('isbanned')
 		.setDescription('Check if a user is banned on SourceJump')
+		.setContexts(InteractionContextType.Guild)
 		.addStringOption(option =>
 			option.setName('user')
 				.setDescription('SteamID or profile url of the user')
 				.setRequired(true)),
 	async execute(interaction) {
-		const profile = interaction.options.getString('user');
+		const profile = interaction.options.getString('user')?.trim();
 		await interaction.deferReply();
 
-		const apiOptions = {
-			method: 'GET',
-			headers: {
-				'api-key': config.SJ_API_KEY,
-			},
-		};
+		if (!profile) {
+			return interaction.editReply({ content: 'Please provide a Steam ID or profile URL.' });
+		}
 
-		let steamID64Raw;
+		let steamID64;
 		try {
-			steamID64Raw = await getSteamID(profile);
+			steamID64 = await getSteamID(profile);
 		}
 		catch {
 			return interaction.editReply({ content: 'There is an issue with the provided Steam ID/URL.' });
 		}
 
-		const sid = new SteamID(steamID64Raw);
-		const id = sid.getSteam3RenderedID();
-		const steamID64 = sid.getSteamID64();
+		try {
+			const sid = new SteamID(steamID64);
+			const steamID3 = sid.getSteam3RenderedID();
+			const players = await fetchSourceJumpJson('/players/banned', config.SJ_API_KEY);
+			if (!Array.isArray(players)) {
+				throw new TypeError('Banned players response was not an array.');
+			}
 
-		return fetch(`${SOURCEJUMP_API_URL}/players/banned`, apiOptions)
-			.then(response => response.text())
-			.then(async body => {
-				if (body.length === 2) {
-					return interaction.editReply({ content: 'Either Tony has unbanned all players, or there is an issue with the API. Try again later.' });
-				}
-				const players = JSON.parse(body);
-				for (const element of players) {
-					if (element.steamid === id) {
-						let avatarUrl = null;
-						try {
-							avatarUrl = await fetchSteamAvatar(steamID64);
-						}
-						catch {
-							// no avatar, continue
-						}
-
-						const embed = {
-							color: 0xE74C3C,
-							author: {
-								name: element.name.toString(),
-								url: `https://steamcommunity.com/profiles/${steamID64}`,
-								...(avatarUrl ? { icon_url: avatarUrl } : {}),
-							},
-							title: 'Player is banned on SourceJump.',
-							...(avatarUrl ? { thumbnail: { url: avatarUrl } } : {}),
-							fields: [
-								{
-									name: 'Ban Date',
-									value: element.ban_date.toString(),
-								},
-							],
-							timestamp: new Date(),
-						};
-						return interaction.editReply({ embeds: [embed] });
-					}
-				}
+			const player = players.find(element => element?.steamid === steamID3);
+			if (!player) {
 				return interaction.editReply({
 					embeds: [{
 						color: 0x57F287,
@@ -86,36 +57,77 @@ module.exports = {
 						timestamp: new Date(),
 					}],
 				});
-			})
-			.catch(err => {
-				console.error(err);
-				return interaction.editReply({ content: 'There was an error fetching data from the SourceJump API.' });
-			});
+			}
+
+			const avatarUrl = await fetchSteamAvatar(steamID64);
+			const embed = {
+				color: 0xE74C3C,
+				author: {
+					name: safeString(player?.name, 'Unknown player'),
+					url: `https://steamcommunity.com/profiles/${steamID64}`,
+					...(avatarUrl ? { icon_url: avatarUrl } : {}),
+				},
+				title: 'Player is banned on SourceJump.',
+				...(avatarUrl ? { thumbnail: { url: avatarUrl } } : {}),
+				fields: [
+					{
+						name: 'Ban Date',
+						value: safeString(player?.ban_date, 'Unknown'),
+					},
+				],
+				timestamp: new Date(),
+			};
+			return interaction.editReply({ embeds: [embed] });
+		}
+		catch (err) {
+			console.error('[isbanned] Failed to query SourceJump bans:', err);
+			return interaction.editReply({ content: 'There was an error fetching data from the SourceJump API.' });
+		}
 	},
 };
 
 function getSteamID(profile) {
 	return new Promise((resolve, reject) => {
-		if (profile.includes('steamcommunity.com/profiles')) {
-			const parts = profile.split('/').filter(p => p !== '');
-			resolve(parts[parts.length - 1]);
+		const trimmed = typeof profile === 'string' ? profile.trim() : '';
+		if (!trimmed) {
+			reject(new TypeError('Missing Steam profile input.'));
+			return;
 		}
-		else if (profile.includes('steamcommunity.com/id')) {
-			const clean = profile.endsWith('/') ? profile.slice(0, -1) : profile;
-			SteamIDResolver.customUrlToSteamID64(clean, (err, res) => {
-				if (err) return reject(err);
-				resolve(res);
-			});
+
+		try {
+			const parsed = new URL(trimmed);
+			const hostname = parsed.hostname.toLowerCase();
+			const parts = parsed.pathname.split('/').filter(Boolean);
+			if (hostname.endsWith('steamcommunity.com') && parts[0] === 'profiles' && parts[1]) {
+				resolve(parts[1]);
+				return;
+			}
+			if (hostname.endsWith('steamcommunity.com') && parts[0] === 'id' && parts[1]) {
+				const vanityUrl = `https://steamcommunity.com/id/${parts[1]}`;
+				SteamIDResolver.customUrlToSteamID64(vanityUrl, (err, res) => {
+					if (err || !res) {
+						reject(err instanceof Error ? err : new TypeError('Could not resolve vanity URL.'));
+						return;
+					}
+					resolve(res);
+				});
+				return;
+			}
 		}
-		else {
-			try {
-				const testSid = new SteamID(profile);
-				if (!testSid.isValid()) return reject(new Error('invalid steamid'));
-				resolve(profile);
+		catch {
+			// Not a URL; fall through to plain SteamID parsing.
+		}
+
+		try {
+			const steamID = new SteamID(trimmed);
+			if (!steamID.isValid()) {
+				reject(new TypeError('Invalid Steam ID.'));
+				return;
 			}
-			catch {
-				reject(new Error('invalid steamid'));
-			}
+			resolve(steamID.getSteamID64());
+		}
+		catch {
+			reject(new TypeError('Invalid Steam ID.'));
 		}
 	});
 }
