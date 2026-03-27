@@ -19,7 +19,7 @@
   "homepage": "https://github.com/jelsum/bhopbot#readme",
   "dependencies": {
     "@discordjs/rest": "^2.6.0",
-    "discord-api-types": "^0.37.120",
+    "discord-api-types": "^0.38.42",
     "discord.js": "^14.25.1",
     "rcon-srcds": "^2.1.0",
     "steamid": "^2.0.0",

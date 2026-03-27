@@ -17,6 +17,14 @@ const queue = [];
 let drainTimer = null;
 let consolePatched = false;
 
+function getLogPrefix() {
+	return `[${new Date().toISOString()} pid=${process.pid}]`;
+}
+
+function formatConsoleArgs(args) {
+	return [getLogPrefix(), ...args];
+}
+
 function scheduleDrain() {
 	if (drainTimer || queue.length === 0) return;
 
@@ -104,14 +112,19 @@ function patchConsole() {
 
 	const originalWarn = console.warn.bind(console);
 	const originalError = console.error.bind(console);
+	const originalLog = console.log.bind(console);
+
+	console.log = (...args) => {
+		originalLog(...formatConsoleArgs(args));
+	};
 
 	console.warn = (...args) => {
-		originalWarn(...args);
+		originalWarn(...formatConsoleArgs(args));
 		enqueue(`${WARN_PREFIX}${wrapCode(formatArgs(args))}`);
 	};
 
 	console.error = (...args) => {
-		originalError(...args);
+		originalError(...formatConsoleArgs(args));
 		enqueue(`${ERROR_PREFIX}${wrapCode(formatArgs(args))}`);
 	};
 }

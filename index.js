@@ -451,7 +451,7 @@ async function replyWithError(interaction, alreadyDeferred = interaction.deferre
 
 async function handleInteractionCommandError(context, interaction, err, alreadyDeferred = interaction.deferred || interaction.replied, startedAt = Date.now(), adapter = null) {
 	if (isHandledInteractionLifecycleError(err)) {
-		console.warn(`[index] Ignoring ${context} failure caused by an expired or already-handled interaction: ${describeDiscordApiError(err)} (${formatInteractionDiagnostics(interaction, startedAt, adapter)})`);
+		console.warn(`[index] Ignoring ${context} failure caused by an expired or already-handled interaction: ${describeDiscordApiError(err)} (${formatInteractionDiagnostics(interaction, startedAt, adapter)}). Likely causes: another bot instance handled it first, the process restarted mid-command, or Discord delivered the interaction too late to acknowledge.`);
 		return;
 	}
 

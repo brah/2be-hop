@@ -141,6 +141,7 @@ Examples:
 
 ## Logging
 
+- console output is timestamped in ISO-8601 format and includes the process ID
 - `console.warn` and `console.error` are mirrored to `logWebhook` when configured
 - log delivery is queued and rate-limited
 - on normal shutdown, the bot attempts to flush pending log messages
@@ -150,6 +151,7 @@ Examples:
 
 - Run only one instance of the bot per token
 - If two instances are online at once, Discord interactions can fail with `Unknown interaction`
+- If dependency resolution looks corrupted after deploy, remove `node_modules` and reinstall before restarting PM2
 - Global command changes can take longer to propagate than guild command changes
 - If you previously used guild commands, leave `clearGuildCommandsOnStartup` enabled until stale guild commands are gone
 
