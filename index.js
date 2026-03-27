@@ -34,6 +34,7 @@ client.on('interactionCreate', async interaction => {
 	const commandContext = `/${interaction.commandName}`;
 	const startedAt = Date.now();
 
+	instrumentInteractionLifecycle(interaction, commandContext, startedAt);
 	logInteractionReceipt(commandContext, interaction);
 
 	if (!interaction.inGuild()) {
@@ -68,6 +69,7 @@ client.on('interactionCreate', async interaction => {
 	const buttonContext = `button ${interaction.customId}`;
 	const startedAt = Date.now();
 
+	instrumentInteractionLifecycle(interaction, buttonContext, startedAt);
 	logInteractionReceipt(buttonContext, interaction);
 
 	if (!interaction.inGuild()) {
@@ -160,6 +162,7 @@ const DISCORD_API_ERROR_CODES = {
 	UnknownInteraction: 10062,
 	InteractionAlreadyAcknowledged: 40060,
 };
+const INSTRUMENTED_INTERACTION = Symbol('instrumentedInteraction');
 
 let lastPubCount = null;
 let lastMapName = null;
@@ -498,14 +501,60 @@ function formatInteractionDiagnostics(interaction, startedAt, adapter = null) {
 	return parts.join(', ');
 }
 
+function formatInteractionContext(interaction) {
+	const parts = [
+		`guild=${interaction?.guildId || 'dm'}`,
+		`channel=${interaction?.channelId || 'unknown'}`,
+		`user=${interaction?.user?.id || 'unknown'}`,
+		`app=${interaction?.applicationId || client.application?.id || 'unknown'}`,
+		`clientUser=${client.user?.id || 'unknown'}`,
+		`createdAt=${typeof interaction?.createdTimestamp === 'number' ? new Date(interaction.createdTimestamp).toISOString() : 'unknown'}`,
+	];
+	return parts.join(', ');
+}
+
+function instrumentInteractionLifecycle(interaction, context, startedAt) {
+	if (!interaction || interaction[INSTRUMENTED_INTERACTION]) return;
+	interaction[INSTRUMENTED_INTERACTION] = true;
+
+	wrapInteractionMethod(interaction, 'deferReply', context, startedAt);
+	wrapInteractionMethod(interaction, 'reply', context, startedAt);
+	wrapInteractionMethod(interaction, 'editReply', context, startedAt);
+	wrapInteractionMethod(interaction, 'followUp', context, startedAt);
+}
+
+function wrapInteractionMethod(interaction, methodName, context, startedAt) {
+	if (typeof interaction[methodName] !== 'function') return;
+
+	const originalMethod = interaction[methodName].bind(interaction);
+	interaction[methodName] = async (...args) => {
+		if (diagnosticCommandLogging) {
+			console.log(`[diag] ${context} calling ${methodName} (${formatInteractionDiagnostics(interaction, startedAt)}; ${formatInteractionContext(interaction)})`);
+		}
+
+		try {
+			const result = await originalMethod(...args);
+			if (diagnosticCommandLogging) {
+				console.log(`[diag] ${context} ${methodName} succeeded (${formatInteractionDiagnostics(interaction, startedAt)}; ${formatInteractionContext(interaction)})`);
+			}
+			return result;
+		}
+		catch (err) {
+			const level = isHandledInteractionLifecycleError(err) ? 'warn' : 'error';
+			console[level](`[index] ${context} ${methodName} failed: ${describeDiscordApiError(err)} (${formatInteractionDiagnostics(interaction, startedAt)}; ${formatInteractionContext(interaction)})`);
+			throw err;
+		}
+	};
+}
+
 function logInteractionReceipt(context, interaction) {
 	if (!diagnosticCommandLogging) return;
-	console.log(`[diag] Received ${context} (${formatInteractionDiagnostics(interaction, Date.now())})`);
+	console.log(`[diag] Received ${context} (${formatInteractionDiagnostics(interaction, Date.now())}; ${formatInteractionContext(interaction)})`);
 }
 
 function logInteractionCompletion(context, interaction, startedAt, adapter = null) {
 	if (!diagnosticCommandLogging) return;
-	console.log(`[diag] Completed ${context} (${formatInteractionDiagnostics(interaction, startedAt, adapter)})`);
+	console.log(`[diag] Completed ${context} (${formatInteractionDiagnostics(interaction, startedAt, adapter)}; ${formatInteractionContext(interaction)})`);
 }
 
 async function shutdown(signal) {
