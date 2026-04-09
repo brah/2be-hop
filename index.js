@@ -865,6 +865,11 @@ async function handleTierPushCycle(currentMap) {
 // nothing to push because the map is invalid or unknown to the snapshot).
 // Returns false on transient failures so the caller can retry on the next
 // poll cycle without skipping over the map.
+//
+// We use the single-argument form `sm_settier <tier>` which updates the
+// currently loaded map's live in-memory tier. The two-argument form
+// `sm_settier <map> <tier>` only updates the stored record for that map
+// name and does not affect the running map's tier reported by /tier.
 async function pushTierForMap(currentMap) {
 	if (!VALID_MAP_NAME.test(currentMap)) {
 		console.warn(`[tiers] Refusing to push tier for invalid map name: ${currentMap}`);
@@ -877,12 +882,12 @@ async function pushTierForMap(currentMap) {
 		return true;
 	}
 
-	const result = await runRconCommand(`sm_settier ${currentMap} ${tier}`);
+	const result = await runRconCommand(`sm_settier ${tier}`);
 	if (result.ok) {
-		console.log(`[tiers] sm_settier ${currentMap} ${tier} -> ok`);
+		console.log(`[tiers] sm_settier ${tier} -> ok (map: ${currentMap})`);
 		return true;
 	}
 
-	console.warn(`[tiers] sm_settier ${currentMap} ${tier} failed: ${result.error?.message || 'unknown error'}`);
+	console.warn(`[tiers] sm_settier ${tier} failed for ${currentMap}: ${result.error?.message || 'unknown error'}`);
 	return false;
 }
