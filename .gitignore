@@ -7,3 +7,7 @@ config.json
 #working directories
 planned/
 in_progress/
+
+#runtime data
+data/tiers.json
+data/tiers.json.tmp

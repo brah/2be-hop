@@ -1,39 +1,26 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionContextType, MessageFlags } = require('discord.js');
 const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
-const Rcon = require('rcon-srcds').default;
+const { runRconCommand } = require('../services/rcon');
 
-function createRcon() {
-	return new Rcon({
-		host: config.rconIP,
-		port: config.rconPort || 27015,
-		encoding: 'utf8',
-		timeout: 5000,
-	});
-}
-
-// Connects to RCON, runs fn(rcon), disconnects. Handles errors and replies.
+// Interaction-aware wrapper around runRconCommand. Hands the caller a
+// minimal `rcon`-like shim with `.execute()` so existing command bodies
+// keep working unchanged.
 async function withRcon(interaction, fn) {
-	if (!config.rconIP || !config.rconPass) {
-		return interaction.editReply('RCON is not configured.');
-	}
+	const shim = {
+		async execute(command) {
+			const result = await runRconCommand(command);
+			if (!result.ok) throw result.error;
+			return result.output;
+		},
+	};
 
-	const rcon = createRcon();
 	try {
-		await rcon.authenticate(config.rconPass);
-		return await fn(rcon);
+		return await fn(shim);
 	}
 	catch (err) {
 		console.error('[sourcemod] RCON error:', err);
 		return interaction.editReply(`Could not reach the server: ${err.message}`);
-	}
-	finally {
-		try {
-			await rcon.disconnect();
-		}
-		catch {
-			// Ignore disconnect failures after command completion.
-		}
 	}
 }
 

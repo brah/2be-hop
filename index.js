@@ -9,6 +9,10 @@ const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v10');
 const config = require('./config.json');
 const { isNonEmptyString } = require('./utils');
+const { runRconCommand } = require('./services/rcon');
+const { refreshSnapshot, getTier } = require('./services/tiers');
+
+const VALID_MAP_NAME = /^[A-Za-z0-9_./-]+$/;
 
 const applicationId = config.applicationId;
 const commandsDirectory = path.join(__dirname, 'commands');
@@ -166,6 +170,10 @@ const INSTRUMENTED_INTERACTION = Symbol('instrumentedInteraction');
 
 let lastPubCount = null;
 let lastMapName = null;
+let lastTierMap = null;
+let tierRetryMap = null;
+let tierRetryCount = 0;
+const MAX_TIER_RETRIES = 3;
 let discordClient = null;
 let shutdownInProgress = false;
 
@@ -193,9 +201,11 @@ process.once('SIGTERM', () => {
 	void shutdown('SIGTERM');
 });
 
-client.once('clientReady', readyClient => {
+client.once('clientReady', async readyClient => {
 	console.log('Bot ready.');
 	discordClient = readyClient;
+
+	await refreshSnapshot().catch(err => console.warn('[tiers] Snapshot refresh raised:', err.message));
 
 	if (!pollEndpoint) {
 		console.warn('[poller] No status endpoint configured. Set serverIP or rconIP/rconPort.');
@@ -773,30 +783,106 @@ async function pollChannels() {
 	const { humanCount, currentMap } = status;
 
 	if (humanCount !== lastPubCount) {
-		const channel = resolveChannel(PUB_CHANNEL_ID);
-		if (channel) {
-			try {
-				await channel.setName(`${PUB_CHANNEL_PREFIX}${humanCount}`);
-				lastPubCount = humanCount;
-				console.log(`[poller] Updated pub channel to ${PUB_CHANNEL_PREFIX}${humanCount}`);
-			}
-			catch (err) {
-				console.error(`[poller] Failed to rename pub channel: ${err.code || 'unknown'} ${err.message}`);
-			}
-		}
+		await updatePubChannel(humanCount);
+	}
+
+	if (currentMap && currentMap !== lastTierMap) {
+		await handleTierPushCycle(currentMap);
 	}
 
 	if (currentMap && currentMap !== lastMapName) {
-		const channel = resolveChannel(MAP_CHANNEL_ID);
-		if (channel) {
-			try {
-				await channel.setName(`${MAP_CHANNEL_PREFIX}${currentMap}`);
-				lastMapName = currentMap;
-				console.log(`[poller] Updated map channel to ${MAP_CHANNEL_PREFIX}${currentMap}`);
-			}
-			catch (err) {
-				console.error(`[poller] Failed to rename map channel: ${err.code || 'unknown'} ${err.message}`);
-			}
-		}
+		await updateMapChannel(currentMap);
 	}
+}
+
+async function updatePubChannel(humanCount) {
+	const channel = resolveChannel(PUB_CHANNEL_ID);
+	if (!channel) return;
+	try {
+		await channel.setName(`${PUB_CHANNEL_PREFIX}${humanCount}`);
+		lastPubCount = humanCount;
+		console.log(`[poller] Updated pub channel to ${PUB_CHANNEL_PREFIX}${humanCount}`);
+	}
+	catch (err) {
+		console.error(`[poller] Failed to rename pub channel: ${err.code || 'unknown'} ${err.message}`);
+	}
+}
+
+async function updateMapChannel(currentMap) {
+	const channel = resolveChannel(MAP_CHANNEL_ID);
+	if (!channel) return;
+	// Maps not in the snapshot (or tier 1, the server default) fall back to T1
+	// so the channel name always carries a tier badge.
+	const tier = getTier(currentMap) ?? 1;
+	const newName = `${MAP_CHANNEL_PREFIX}${currentMap} (T${tier})`;
+	try {
+		await channel.setName(newName);
+		lastMapName = currentMap;
+		console.log(`[poller] Updated map channel to ${newName}`);
+	}
+	catch (err) {
+		console.error(`[poller] Failed to rename map channel: ${err.code || 'unknown'} ${err.message}`);
+	}
+}
+
+// Wraps pushTierForMap with bounded retries so a sustained RCON outage
+// doesn't spam logs and reconnect attempts every poll cycle. After
+// MAX_TIER_RETRIES consecutive failures on the same map, we give up and
+// wait for the next actual map change to try again. The retry counter is
+// scoped to a specific map via tierRetryMap so failures on map A don't
+// shorten the retry budget for map B when the server moves on.
+async function handleTierPushCycle(currentMap) {
+	if (currentMap !== tierRetryMap) {
+		tierRetryMap = currentMap;
+		tierRetryCount = 0;
+	}
+
+	let handled = false;
+	try {
+		handled = await pushTierForMap(currentMap);
+	}
+	catch (err) {
+		console.warn('[tiers] Push raised:', err.message);
+	}
+
+	if (handled) {
+		lastTierMap = currentMap;
+		tierRetryMap = null;
+		tierRetryCount = 0;
+		return;
+	}
+
+	tierRetryCount += 1;
+	if (tierRetryCount >= MAX_TIER_RETRIES) {
+		console.warn(`[tiers] Giving up on ${currentMap} after ${MAX_TIER_RETRIES} failed attempts; will retry on next map change.`);
+		lastTierMap = currentMap;
+		tierRetryMap = null;
+		tierRetryCount = 0;
+	}
+}
+
+// Returns true when the map has been "handled" (push succeeded, or there is
+// nothing to push because the map is invalid or unknown to the snapshot).
+// Returns false on transient failures so the caller can retry on the next
+// poll cycle without skipping over the map.
+async function pushTierForMap(currentMap) {
+	if (!VALID_MAP_NAME.test(currentMap)) {
+		console.warn(`[tiers] Refusing to push tier for invalid map name: ${currentMap}`);
+		return true;
+	}
+
+	const tier = getTier(currentMap);
+	if (tier === null) {
+		console.log(`[tiers] No tier known for ${currentMap}; leaving server default in place.`);
+		return true;
+	}
+
+	const result = await runRconCommand(`sm_settier ${currentMap} ${tier}`);
+	if (result.ok) {
+		console.log(`[tiers] sm_settier ${currentMap} ${tier} -> ok`);
+		return true;
+	}
+
+	console.warn(`[tiers] sm_settier ${currentMap} ${tier} failed: ${result.error?.message || 'unknown error'}`);
+	return false;
 }
