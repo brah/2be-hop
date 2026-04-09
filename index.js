@@ -781,6 +781,7 @@ async function pollChannels() {
 	if (!status) return;
 
 	const { humanCount, currentMap } = status;
+	console.log(`[poller] cycle: humanCount=${humanCount} currentMap=${currentMap} lastTierMap=${lastTierMap} lastMapName=${lastMapName}`);
 
 	if (humanCount !== lastPubCount) {
 		await updatePubChannel(humanCount);
@@ -832,6 +833,7 @@ async function updateMapChannel(currentMap) {
 // scoped to a specific map via tierRetryMap so failures on map A don't
 // shorten the retry budget for map B when the server moves on.
 async function handleTierPushCycle(currentMap) {
+	console.log(`[tiers] handleTierPushCycle entered for ${currentMap}`);
 	if (currentMap !== tierRetryMap) {
 		tierRetryMap = currentMap;
 		tierRetryCount = 0;
