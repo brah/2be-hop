@@ -871,23 +871,31 @@ async function handleTierPushCycle(currentMap) {
 // `sm_settier <map> <tier>` only updates the stored record for that map
 // name and does not affect the running map's tier reported by /tier.
 async function pushTierForMap(currentMap) {
+	console.log(`[tiers] pushTierForMap: enter (map=${currentMap})`);
+
 	if (!VALID_MAP_NAME.test(currentMap)) {
-		console.warn(`[tiers] Refusing to push tier for invalid map name: ${currentMap}`);
+		console.log(`[tiers] pushTierForMap: invalid map name, skipping (${currentMap})`);
 		return true;
 	}
 
 	const tier = getTier(currentMap);
+	console.log(`[tiers] pushTierForMap: getTier(${currentMap}) = ${tier}`);
 	if (tier === null) {
 		console.log(`[tiers] No tier known for ${currentMap}; leaving server default in place.`);
 		return true;
 	}
 
+	console.log(`[tiers] pushTierForMap: calling runRconCommand sm_settier ${tier}`);
+	const startedAt = Date.now();
 	const result = await runRconCommand(`sm_settier ${tier}`, { expectResponse: false });
+	const elapsedMs = Date.now() - startedAt;
+	console.log(`[tiers] pushTierForMap: runRconCommand returned ok=${result.ok} elapsed=${elapsedMs}ms err=${result.error?.message ?? 'none'}`);
+
 	if (result.ok) {
 		console.log(`[tiers] sm_settier ${tier} -> ok (map: ${currentMap})`);
 		return true;
 	}
 
-	console.warn(`[tiers] sm_settier ${tier} failed for ${currentMap}: ${result.error?.message || 'unknown error'}`);
+	console.log(`[tiers] sm_settier ${tier} failed for ${currentMap}: ${result.error?.message || 'unknown error'}`);
 	return false;
 }
