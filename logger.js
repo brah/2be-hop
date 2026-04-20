@@ -1,8 +1,11 @@
 /**
  * Webhook logger that mirrors console warnings and errors to Discord.
  *
- * Messages are queued and drained slowly to stay below webhook rate limits.
- * The queue is bounded so repeated failures cannot grow memory without limit.
+ * Messages are queued and drained with backoff-aware pacing so we stay
+ * below webhook rate limits. The queue is bounded so repeated failures
+ * cannot grow memory without limit.
+ *
+ * Side effects only run after `init()` is called, not on require.
  */
 
 const config = require('./config.json');
@@ -12,50 +15,78 @@ const DRAIN_INTERVAL_MS = 2500;
 const MAX_QUEUE = 20;
 const WARN_PREFIX = '\u26A0\uFE0F **WARN** ';
 const ERROR_PREFIX = '\u{1F534} **ERROR** ';
+const EXIT_GRACE_MS = 3000;
 
 const queue = [];
 let drainTimer = null;
-let consolePatched = false;
+// Promise representing an in-flight webhook POST, or null if idle. Both
+// drain() (for re-entrancy) and flush() (to wait for shutdown delivery)
+// synchronize on this single handle.
+let currentDrain = null;
+let nextAllowedPostAt = 0;
+let initialized = false;
 
 function getLogPrefix() {
 	return `[${new Date().toISOString()} pid=${process.pid}]`;
 }
 
-function formatConsoleArgs(args) {
-	return [getLogPrefix(), ...args];
-}
-
 function scheduleDrain() {
-	if (drainTimer || queue.length === 0) return;
-
+	if (drainTimer || currentDrain || queue.length === 0 || !WEBHOOK_URL) return;
+	const delay = Math.max(nextAllowedPostAt - Date.now(), DRAIN_INTERVAL_MS);
 	drainTimer = setTimeout(() => {
-		drain().catch(err => {
-			process.stderr.write(`[logger] drain failed: ${err.message}\n`);
-		});
-	}, DRAIN_INTERVAL_MS);
+		drainTimer = null;
+		drain().catch(err => process.stderr.write(`[logger] drain failed: ${err.message}\n`));
+	}, delay);
 	drainTimer.unref();
 }
 
-async function drain() {
-	drainTimer = null;
-	if (queue.length === 0 || !WEBHOOK_URL) return;
-
-	const content = queue.shift();
+async function postOnce(content) {
 	try {
 		const response = await fetch(WEBHOOK_URL, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ content }),
 		});
+
+		if (response.status === 429) {
+			const retryAfter = Number(response.headers.get('retry-after')) || 2;
+			nextAllowedPostAt = Date.now() + (retryAfter * 1000) + 250;
+			return { requeue: true };
+		}
+
 		if (!response.ok) {
 			process.stderr.write(`[logger] webhook returned ${response.status}\n`);
+			return { requeue: false };
 		}
+
+		const resetAfter = Number(response.headers.get('x-ratelimit-reset-after'));
+		if (Number.isFinite(resetAfter) && resetAfter > 0) {
+			nextAllowedPostAt = Date.now() + (resetAfter * 1000);
+		}
+		return { requeue: false };
 	}
 	catch (err) {
 		process.stderr.write(`[logger] failed to post to webhook: ${err.message}\n`);
+		return { requeue: false };
 	}
+}
 
-	scheduleDrain();
+async function drain() {
+	if (currentDrain || queue.length === 0 || !WEBHOOK_URL) return currentDrain;
+	currentDrain = (async () => {
+		try {
+			const content = queue.shift();
+			const { requeue } = await postOnce(content);
+			if (requeue) queue.unshift(content);
+		}
+		finally {
+			currentDrain = null;
+		}
+	})();
+	const inFlight = currentDrain;
+	await inFlight;
+	if (queue.length > 0) scheduleDrain();
+	return inFlight;
 }
 
 async function flush() {
@@ -65,17 +96,23 @@ async function flush() {
 		drainTimer = null;
 	}
 
-	while (queue.length > 0) {
+	// Wait for any in-flight post first, then drain the rest serially.
+	// If a post is in flight we must not shift the queue ourselves, and
+	// we must not return before that post resolves (or requeues).
+	while (currentDrain || queue.length > 0) {
+		if (currentDrain) {
+			await currentDrain;
+			continue;
+		}
+		const wait = nextAllowedPostAt - Date.now();
+		if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
 		await drain();
 	}
 }
 
 function enqueue(content) {
 	if (!WEBHOOK_URL) return;
-
-	if (queue.length >= MAX_QUEUE) {
-		queue.shift();
-	}
+	if (queue.length >= MAX_QUEUE) queue.shift();
 	queue.push(content);
 	scheduleDrain();
 }
@@ -101,30 +138,21 @@ function wrapCode(text) {
 	const truncated = trimmed.length > maxLength
 		? `${trimmed.slice(0, maxLength)}\n... (truncated)`
 		: trimmed;
-	return truncated.includes('\n')
-		? `\`\`\`\n${truncated}\n\`\`\``
-		: `\`${truncated}\``;
+	return truncated.includes('\n') ? `\`\`\`\n${truncated}\n\`\`\`` : `\`${truncated}\``;
 }
 
 function patchConsole() {
-	if (consolePatched) return;
-	consolePatched = true;
-
 	const originalWarn = console.warn.bind(console);
 	const originalError = console.error.bind(console);
 	const originalLog = console.log.bind(console);
 
-	console.log = (...args) => {
-		originalLog(...formatConsoleArgs(args));
-	};
-
+	console.log = (...args) => originalLog(getLogPrefix(), ...args);
 	console.warn = (...args) => {
-		originalWarn(...formatConsoleArgs(args));
+		originalWarn(getLogPrefix(), ...args);
 		enqueue(`${WARN_PREFIX}${wrapCode(formatArgs(args))}`);
 	};
-
 	console.error = (...args) => {
-		originalError(...formatConsoleArgs(args));
+		originalError(getLogPrefix(), ...args);
 		enqueue(`${ERROR_PREFIX}${wrapCode(formatArgs(args))}`);
 	};
 }
@@ -141,16 +169,22 @@ function attachGlobalHandlers() {
 
 	process.on('uncaughtException', err => {
 		console.error('[process] Uncaught exception:', err.stack || err.message);
-		drain().catch(drainError => {
-			process.stderr.write(`[logger] failed to flush after uncaught exception: ${drainError.message}\n`);
-		});
-		setTimeout(() => process.exit(1), DRAIN_INTERVAL_MS + 500).unref();
+		// Best-effort flush. Do not `.unref()` the timer — we want it to keep
+		// the loop alive long enough to actually ship the message.
+		flush()
+			.catch(flushError => process.stderr.write(`[logger] failed to flush after uncaught exception: ${flushError.message}\n`))
+			.finally(() => setTimeout(() => process.exit(1), EXIT_GRACE_MS));
 	});
 }
 
-patchConsole();
-attachGlobalHandlers();
+function init() {
+	if (initialized) return;
+	initialized = true;
+	patchConsole();
+	attachGlobalHandlers();
+}
 
 module.exports = {
+	init,
 	flush,
 };

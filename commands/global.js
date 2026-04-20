@@ -39,7 +39,7 @@ module.exports = {
 
 			await interaction.editReply({ embeds: [embed] });
 
-			if (typeof interaction.followUp === 'function') {
+			if (interaction.supportsFollowUp !== false) {
 				const row = new ActionRowBuilder().addComponents(
 					new ButtonBuilder()
 						.setCustomId(`wr:${safeString(record?.map, mapName)}`)

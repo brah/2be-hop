@@ -4,10 +4,10 @@ const fsPromises = require('node:fs/promises');
 const zlib = require('node:zlib');
 const { pipeline } = require('node:stream/promises');
 const tarStream = require('tar-stream');
+const { isValidMapName } = require('../utils');
 
 const TARBALL_URL = 'https://codeload.github.com/srcwr/zones-cstrike/tar.gz/refs/heads/main';
 const TIER_ENTRY_REGEX = /^zones-cstrike-main\/i\/([A-Za-z0-9_./-]+)\.json$/;
-const VALID_MAP_NAME = /^[A-Za-z0-9_./-]+$/;
 const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 30 * 1000;
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -96,7 +96,7 @@ async function downloadTierMap() {
 			}
 
 			const mapName = match[1];
-			if (!VALID_MAP_NAME.test(mapName)) {
+			if (!isValidMapName(mapName)) {
 				stream.resume();
 				stream.on('end', next);
 				return;
@@ -130,7 +130,7 @@ async function downloadTierMap() {
 	}
 	catch (err) {
 		if (err?.name === 'AbortError') {
-			throw new Error(`Tarball download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`);
+			throw new Error(`Tarball download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`, { cause: err });
 		}
 		throw err;
 	}
@@ -172,7 +172,6 @@ async function refreshSnapshot({ force = false } = {}) {
 }
 
 module.exports = {
-	loadTierIndex,
 	refreshSnapshot,
 	getTier,
 	getSnapshotMeta,

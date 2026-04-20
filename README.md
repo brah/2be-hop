@@ -104,14 +104,11 @@ The bot reads runtime configuration from `config.json`.
 - `rconPort`: RCON port, usually `27015`
 - `serverIP`: A2S query endpoint in `host:port` format
 - `adminRoles`: Discord role IDs allowed to use `/setmap`
+- `adminUsers`: Discord user IDs allowed to use `/setmap`, independent of role membership. A member passes the admin check if they are in `adminUsers` OR hold a role listed in `adminRoles`.
 - `SJ_API_KEY`: SourceJump API key
 - `logWebhook`: optional Discord webhook for forwarded warnings/errors
 - `clearGuildCommandsOnStartup`: defaults to `true`; clears stale guild-scoped commands from every guild the bot is in before re-registering the global command set
 - `diagnosticCommandLogging`: defaults to `false`; enables verbose interaction lifecycle logging
-
-### Legacy / currently unused
-
-- `guildId`: still present in `config.json.example`, but the current code does not read it
 
 Notes:
 
@@ -177,23 +174,24 @@ On boot, the bot:
 1. loads command modules from `commands/`
 2. logs in to Discord
 3. waits for the client to become ready
-4. optionally clears stale guild-scoped slash commands from every guild it is in
-5. registers the current command set as global slash commands
-6. starts the A2S poller
+4. hashes the serialized command payload and compares it to the last-registered hash in `data/.command-hash`
+5. if the hash differs, optionally clears stale guild-scoped slash commands and re-registers the current command set globally
+6. refreshes the tier snapshot and starts the A2S poller
 
 Important notes:
 
 - Command registration is global, not guild-specific
+- Slash command registration is skipped on restart when the payload hasn't changed, to avoid unnecessary API calls
 - Guild cleanup exists only to remove old duplicates from previous guild-scoped versions
 - Global slash command propagation can take longer than guild command propagation
 
 ## Poller
 
-The bot polls the game server with A2S every 5 minutes and:
+The bot polls the game server with A2S every 3 minutes and:
 
 - renames a pub-count Discord channel
 - renames a current-map Discord channel
-- pushes the canonical map tier via `sm_settier <map> <tier>` whenever the current map changes
+- pushes the canonical map tier via `sm_settier <tier>` (single-argument form, which updates the currently loaded map's live in-memory tier) whenever the current map changes
 
 Current limitations:
 
@@ -209,12 +207,13 @@ The bot needs permission to:
 
 Tier data is sourced from the public [srcwr/zones-cstrike](https://github.com/srcwr/zones-cstrike) repository (the `i/<map>.json` files). On startup the bot downloads the repository tarball, extracts every per-map tier file, and writes a flat `data/tiers.json` snapshot. The snapshot is refreshed only if it is missing or older than 7 days.
 
-When the A2S poller detects that the current map has changed, the bot looks up that map in the snapshot and runs `sm_settier <map> <tier>` exactly once via RCON. Important behaviors:
+When the A2S poller detects that the current map has changed, the bot looks up that map in the snapshot and runs `sm_settier <tier>` exactly once via RCON. Important behaviors:
 
+- **Single-arg form.** The bot sends `sm_settier <tier>`, which updates the live in-memory tier of the currently loaded map. The two-argument form (`sm_settier <map> <tier>`) only updates the stored record and does not affect the running map, so it is not used.
 - **No maplist enumeration.** The bot never asks the server "what maps do you have?" — it only ever pushes the tier for the map that just loaded.
 - **Defaults are skipped.** Maps whose canonical tier is `1` (the SourceMod default) or `0` are excluded from the snapshot at build time, so the bot never wastes an RCON call on them.
-- **Maps not in srcwr are skipped silently.** If srcwr has no tier for the current map, the bot logs a debug line and leaves the server's existing setting in place.
-- **RCON failures are non-fatal.** If the push fails, the bot logs a warning and continues — the next map change will try again.
+- **Maps not in srcwr are skipped silently.** If srcwr has no tier for the current map, the bot leaves the server's existing setting in place.
+- **RCON failures are non-fatal and bounded.** If the push fails, the bot retries on subsequent poll cycles for that same map up to 3 times, then gives up until the next map change.
 - **Snapshot fetch failures are non-fatal.** If the tarball download fails, the bot falls back to the existing cached snapshot. If no cache exists, the tier index stays empty and tier pushes are silently skipped.
 
 The snapshot file is gitignored — it is regenerated on first boot.
@@ -270,19 +269,16 @@ pm2 delete bhopbot
 pm2 save
 ```
 
-## Linting
-
-There is no dedicated `npm run lint` script in `package.json` right now. Use:
+## Scripts
 
 ```bash
-npx eslint .
+npm start   # run the bot
+npm run lint # lint the codebase
 ```
 
 ## What Needs Cleanup Later
 
 These are the main repo/documentation mismatches or rough edges still visible in the code:
 
-- `config.json.example` still contains `guildId`, which is no longer used
-- poller channel IDs are hardcoded in `index.js`
-- `package.json` still has the default placeholder `test` script
+- poller channel IDs are hardcoded in `index.js` (intentional — set-and-forget for a single deployment)
 - there are no automated tests beyond linting

@@ -2,6 +2,7 @@ const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Inter
 const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const { runRconCommand } = require('../services/rcon');
+const { isValidMapName } = require('../utils');
 
 // Interaction-aware wrapper around runRconCommand. Hands the caller a
 // minimal `rcon`-like shim with `.execute()` so existing command bodies
@@ -59,10 +60,10 @@ function parseStatus(raw) {
 			const nameMatch = /"([^"]*)"/.exec(line);
 			const name = nameMatch ? nameMatch[1] : 'Unknown';
 			const rest = line.replace(/"[^"]*"/, '').trim().split(/\s+/);
-			const ping = rest[4] || '?';
+			const ping = Number.parseInt(rest[4], 10);
 			return { name, ping };
 		})
-		.filter(player => player.ping !== '?' && !Number.isNaN(Number(player.ping)));
+		.filter(player => Number.isFinite(player.ping));
 
 	return { currentMap, humanCount, maxPlayers, players };
 }
@@ -84,14 +85,14 @@ function sydneyTimeString() {
 }
 
 function isAdmin(interaction) {
-	const adminRoles = config.adminRoles;
-	if (!Array.isArray(adminRoles) || adminRoles.length === 0) return false;
+	const userId = interaction.member?.user?.id ?? interaction.member?.id;
+	const adminUsers = Array.isArray(config.adminUsers) ? config.adminUsers : [];
+	if (userId && adminUsers.some(id => String(id) === String(userId))) return true;
+
+	const adminRoles = Array.isArray(config.adminRoles) ? config.adminRoles : [];
+	if (adminRoles.length === 0) return false;
 	const roleCache = interaction.member?.roles?.cache;
 	return adminRoles.some(id => roleCache?.has(String(id)));
-}
-
-function isValidMapName(map) {
-	return typeof map === 'string' && /^[A-Za-z0-9_./-]+$/.test(map);
 }
 
 module.exports = [
@@ -124,7 +125,7 @@ module.exports = [
 				const { currentMap } = parseStatus(raw);
 				await interaction.editReply(`[SM] Current Map: ${currentMap}`);
 
-				if (typeof interaction.followUp === 'function') {
+				if (interaction.supportsFollowUp !== false) {
 					const row = new ActionRowBuilder().addComponents(
 						new ButtonBuilder()
 							.setCustomId(`global:${currentMap}`)

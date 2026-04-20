@@ -3,27 +3,25 @@ const path = require('node:path');
 const config = require(path.join(__dirname, '..', 'config.json'));
 const {
 	buildSourceJumpRecordEmbed,
+	endpointKey,
 	fetchSourceJumpJson,
+	normalizeEndpoint,
 	safeString,
 } = require('../utils');
 
-function normalizeEndpoint(value, fallbackPort = 27015) {
-	if (typeof value !== 'string' || value.trim() === '') return null;
-	try {
-		const parsed = new URL(value.includes('://') ? value : `udp://${value}`);
-		return `${parsed.hostname.toLowerCase()}:${parsed.port || fallbackPort}`;
-	}
-	catch {
-		return value.trim().toLowerCase();
-	}
-}
-
+// Server WR matching compares SourceJump run IPs against every endpoint
+// the deployment might present as. SJ sometimes records the A2S game port
+// (27015 by default) rather than rconPort, so we include both the
+// configured rconPort variant AND the bare-default-port variant whenever
+// they differ. serverIP, when present, already carries its own port.
 function getConfiguredServerKeys() {
-	return new Set([
-		normalizeEndpoint(config.serverIP),
-		normalizeEndpoint(config.rconIP && `${config.rconIP}:${config.rconPort || 27015}`),
-		normalizeEndpoint(config.rconIP),
-	].filter(Boolean));
+	const rconPort = config.rconPort || 27015;
+	const keys = [
+		endpointKey(normalizeEndpoint(config.serverIP)),
+		endpointKey(normalizeEndpoint(config.rconIP, rconPort)),
+		endpointKey(normalizeEndpoint(config.rconIP, 27015)),
+	].filter(Boolean);
+	return new Set(keys);
 }
 
 module.exports = {
@@ -50,7 +48,7 @@ module.exports = {
 			}
 
 			const configuredServerKeys = getConfiguredServerKeys();
-			const serverRecords = records.filter(record => configuredServerKeys.has(normalizeEndpoint(record?.ip)));
+			const serverRecords = records.filter(record => configuredServerKeys.has(endpointKey(normalizeEndpoint(record?.ip))));
 			const globalRecord = records[0];
 			const embeds = [];
 

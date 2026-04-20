@@ -1,9 +1,11 @@
 {
-  "name": "BhopBotv2",
+  "name": "bhopbot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Discord bot for a bhop community server.",
   "main": "index.js",
   "scripts": {
+    "start": "node .",
+    "lint": "eslint .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -27,8 +29,8 @@
     "tar-stream": "^3.1.8"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.2",
-    "eslint": "^9.39.2",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.1",
     "globals": "^17.3.0",
     "nodemon": "^3.1.11"
   }
